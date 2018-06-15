@@ -22,7 +22,9 @@ import { localize } from 'vs/nls';
 import { FileChangeType, IFileService } from 'vs/platform/files/common/files';
 import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
 import { IProgress, IProgressRunner, emptyProgressRunner } from 'vs/platform/progress/common/progress';
-import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { IEnvironmentService } from 'vs/platform/environment/common/environment';
+import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 
 abstract class Recording {
 
@@ -266,7 +268,9 @@ export class BulkEdit {
 		editor: ICodeEditor,
 		progress: IProgressRunner,
 		@ITextModelService private readonly _textModelService: ITextModelService,
-		@IFileService private readonly _fileService: IFileService
+		@IFileService private readonly _fileService: IFileService,
+		@IEnvironmentService private readonly _environmentService: IEnvironmentService,
+		@IWorkspaceContextService private readonly _contextService: IWorkspaceContextService
 	) {
 		this._editor = editor;
 		this._progress = progress || emptyProgressRunner;
@@ -359,7 +363,7 @@ export class BulkEdit {
 
 		const conflicts = edits
 			.filter(edit => recording.hasChanged(edit.resource))
-			.map(edit => getPathLabel(edit.resource));
+			.map(edit => getPathLabel(edit.resource, this._environmentService, this._contextService));
 
 		recording.stop();
 
@@ -380,9 +384,11 @@ export class BulkEditService implements IBulkEditService {
 
 	constructor(
 		@IModelService private readonly _modelService: IModelService,
-		@IWorkbenchEditorService private readonly _workbenchEditorService: IWorkbenchEditorService,
+		@IEditorService private readonly _editorService: IEditorService,
 		@ITextModelService private readonly _textModelService: ITextModelService,
-		@IFileService private readonly _fileService: IFileService
+		@IFileService private readonly _fileService: IFileService,
+		@IEnvironmentService private readonly _environmentService: IEnvironmentService,
+		@IWorkspaceContextService private readonly _contextService: IWorkspaceContextService
 	) {
 
 	}
@@ -407,16 +413,13 @@ export class BulkEditService implements IBulkEditService {
 		// try to find code editor
 		// todo@joh, prefer edit that gets edited
 		if (!codeEditor) {
-			let editor = this._workbenchEditorService.getActiveEditor();
-			if (editor) {
-				let candidate = editor.getControl();
-				if (isCodeEditor(candidate)) {
-					codeEditor = candidate;
-				}
+			let candidate = this._editorService.activeTextEditorWidget;
+			if (isCodeEditor(candidate)) {
+				codeEditor = candidate;
 			}
 		}
 
-		const bulkEdit = new BulkEdit(options.editor, options.progress, this._textModelService, this._fileService);
+		const bulkEdit = new BulkEdit(options.editor, options.progress, this._textModelService, this._fileService, this._environmentService, this._contextService);
 		bulkEdit.add(edits);
 		return bulkEdit.perform().then(selection => {
 			return {

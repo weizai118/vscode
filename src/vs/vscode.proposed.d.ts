@@ -5,59 +5,21 @@
 
 // This is the place for API experiments and proposal.
 
+import { QuickPickItem } from 'vscode';
+
 declare module 'vscode' {
 
 	export namespace window {
 		export function sampleFunction(): Thenable<any>;
 	}
 
-	//#region Joh: file system provider (OLD)
-
-	export enum DeprecatedFileChangeType {
-		Updated = 0,
-		Added = 1,
-		Deleted = 2
-	}
-	export interface DeprecatedFileChange {
-		type: DeprecatedFileChangeType;
-		resource: Uri;
-	}
-	export enum DeprecatedFileType {
-		File = 0,
-		Dir = 1,
-		Symlink = 2
-	}
-	export interface DeprecatedFileStat {
-		id: number | string;
-		mtime: number;
-		size: number;
-		type: DeprecatedFileType;
-	}
-	export interface DeprecatedFileSystemProvider {
-		readonly onDidChange?: Event<DeprecatedFileChange[]>;
-		utimes(resource: Uri, mtime: number, atime: number): Thenable<DeprecatedFileStat>;
-		stat(resource: Uri): Thenable<DeprecatedFileStat>;
-		read(resource: Uri, offset: number, length: number, progress: Progress<Uint8Array>): Thenable<number>;
-		write(resource: Uri, content: Uint8Array): Thenable<void>;
-		move(resource: Uri, target: Uri): Thenable<DeprecatedFileStat>;
-		mkdir(resource: Uri): Thenable<DeprecatedFileStat>;
-		readdir(resource: Uri): Thenable<[Uri, DeprecatedFileStat][]>;
-		rmdir(resource: Uri): Thenable<void>;
-		unlink(resource: Uri): Thenable<void>;
-	}
-	export namespace workspace {
-		export function registerDeprecatedFileSystemProvider(scheme: string, provider: DeprecatedFileSystemProvider): Disposable;
-	}
-
-	//#endregion
-
 	//#region Joh: remote, search provider
 
 	export interface TextSearchQuery {
 		pattern: string;
-		isRegExp?: boolean;
-		isCaseSensitive?: boolean;
-		isWordMatch?: boolean;
+		isRegExp: boolean;
+		isCaseSensitive: boolean;
+		isWordMatch: boolean;
 	}
 
 	export interface SearchOptions {
@@ -66,10 +28,10 @@ declare module 'vscode' {
 		excludes: string[];
 		useIgnoreFiles?: boolean;
 		followSymlinks?: boolean;
-		previewOptions?: any; // total length? # of context lines? leading and trailing # of chars?
 	}
 
 	export interface TextSearchOptions extends SearchOptions {
+		previewOptions?: any; // total length? # of context lines? leading and trailing # of chars?
 		maxFileSize?: number;
 		encoding?: string;
 	}
@@ -77,7 +39,7 @@ declare module 'vscode' {
 	export interface FileSearchOptions extends SearchOptions { }
 
 	export interface TextSearchResult {
-		uri: Uri;
+		path: string;
 		range: Range;
 
 		// For now, preview must be a single line of text
@@ -85,7 +47,7 @@ declare module 'vscode' {
 	}
 
 	export interface SearchProvider {
-		provideFileSearchResults?(options: FileSearchOptions, progress: Progress<Uri>, token: CancellationToken): Thenable<void>;
+		provideFileSearchResults?(options: FileSearchOptions, progress: Progress<string>, token: CancellationToken): Thenable<void>;
 		provideTextSearchResults?(query: TextSearchQuery, options: TextSearchOptions, progress: Progress<TextSearchResult>, token: CancellationToken): Thenable<void>;
 	}
 
@@ -183,7 +145,7 @@ declare module 'vscode' {
 
 	export interface DebugConfigurationProvider {
 		/**
-		 * This optional method is called just before a debug adapter is started to determine its excutable path and arguments.
+		 * This optional method is called just before a debug adapter is started to determine its executable path and arguments.
 		 * Registering more than one debugAdapterExecutable for a type results in an error.
 		 * @param folder The workspace folder from which the configuration originates from or undefined for a folderless setup.
 		 * @param token A cancellation token.
@@ -296,148 +258,79 @@ declare module 'vscode' {
 
 	//#endregion
 
-	//#region Matt: WebView Serializer
-
+	//#region Comments
 	/**
-	 * Save and restore webview panels that have been persisted when vscode shuts down.
+	 * Comments provider related APIs are still in early stages, they may be changed significantly during our API experiments.
 	 */
-	interface WebviewPanelSerializer {
-		/**
-		 * Save a webview panel's `state`.
-		 *
-		 * Called before shutdown. Extensions have a 250ms timeframe to return a state. If serialization
-		 * takes longer than 250ms, the panel will not be serialized.
-		 *
-		 * @param webviewPanel webview Panel to serialize. May or may not be visible.
-		 *
-		 * @returns JSON serializable state blob.
-		 */
-		serializeWebviewPanel(webviewPanel: WebviewPanel): Thenable<any>;
 
-		/**
-		 * Restore a webview panel from its seriailzed `state`.
-		 *
-		 * Called when a serialized webview first becomes visible.
-		 *
-		 * @param webviewPanel Webview panel to restore. The serializer should take ownership of this panel.
-		 * @param state Persisted state.
-		 *
-		 * @return Thanble indicating that the webview has been fully restored.
-		 */
-		deserializeWebviewPanel(webviewPanel: WebviewPanel, state: any): Thenable<void>;
+	interface CommentInfo {
+		threads: CommentThread[];
+		commentingRanges?: Range[];
 	}
 
-	namespace window {
+	export enum CommentThreadCollapsibleState {
 		/**
-		 * Registers a webview panel serializer.
-		 *
-		 * Extensions that support reviving should have an `"onView:viewType"` activation method and
-		 * make sure that [registerWebviewPanelSerializer](#registerWebviewPanelSerializer) is called during activation.
-		 *
-		 * Only a single serializer may be registered at a time for a given `viewType`.
-		 *
-		 * @param viewType Type of the webview panel that can be serialized.
-		 * @param reviver Webview serializer.
+		 * Determines an item is collapsed
 		 */
-		export function registerWebviewPanelSerializer(viewType: string, reviver: WebviewPanelSerializer): Disposable;
+		Collapsed = 0,
+		/**
+		 * Determines an item is expanded
+		 */
+		Expanded = 1
 	}
 
-	//#endregion
-
-	//#region Tasks
-
-	/**
-	 * An object representing an executed Task. It can be used
-	 * to terminate a task.
-	 *
-	 * This interface is not intended to be implemented.
-	 */
-	export interface TaskExecution {
-		/**
-		 * The task that got started.
-		 */
-		task: Task;
-
-		/**
-		 * Terminates the task execution.
-		 */
-		terminate(): void;
+	interface CommentThread {
+		threadId: string;
+		resource: Uri;
+		range: Range;
+		comments: Comment[];
+		collapsibleState?: CommentThreadCollapsibleState;
 	}
 
-	/**
-	 * An event signaling the start of a task execution.
-	 *
-	 * This interface is not intended to be implemented.
-	 */
-	interface TaskStartEvent {
-		/**
-		 * The task item representing the task that got started.
-		 */
-		execution: TaskExecution;
+	interface Comment {
+		commentId: string;
+		body: MarkdownString;
+		userName: string;
+		gravatar: string;
+		command?: Command;
 	}
 
-	/**
-	 * An event signaling the end of an executed task.
-	 *
-	 * This interface is not intended to be implemented.
-	 */
-	interface TaskEndEvent {
+	export interface CommentThreadChangedEvent {
 		/**
-		 * The task item representing the task that finished.
+		 * Added comment threads.
 		 */
-		execution: TaskExecution;
+		readonly added: CommentThread[];
+
+		/**
+		 * Removed comment threads.
+		 */
+		readonly removed: CommentThread[];
+
+		/**
+		 * Changed comment threads.
+		 */
+		readonly changed: CommentThread[];
 	}
 
-	export interface TaskFilter {
-		/**
-		 * The task version as used in the tasks.json file.
-		 * The string support the package.json semver notation.
-		 */
-		version?: string;
-
-		/**
-		 * The task type to return;
-		 */
-		type?: string;
+	interface DocumentCommentProvider {
+		provideDocumentComments(document: TextDocument, token: CancellationToken): Promise<CommentInfo>;
+		createNewCommentThread?(document: TextDocument, range: Range, text: string, token: CancellationToken): Promise<CommentThread>;
+		replyToCommentThread?(document: TextDocument, range: Range, commentThread: CommentThread, text: string, token: CancellationToken): Promise<CommentThread>;
+		onDidChangeCommentThreads?: Event<CommentThreadChangedEvent>;
 	}
 
-	export namespace workspace {
+	interface WorkspaceCommentProvider {
+		provideWorkspaceComments(token: CancellationToken): Promise<CommentThread[]>;
+		createNewCommentThread?(document: TextDocument, range: Range, text: string, token: CancellationToken): Promise<CommentThread>;
+		replyToCommentThread?(document: TextDocument, range: Range, commentThread: CommentThread, text: string, token: CancellationToken): Promise<CommentThread>;
 
-		/**
-		 * Fetches all task available in the systems. Thisweweb includes tasks
-		 * from `tasks.json` files as well as tasks from task providers
-		 * contributed through extensions.
-		 *
-		 * @param filter a filter to filter the return tasks.
-		 */
-		export function fetchTasks(filter?: TaskFilter): Thenable<Task[]>;
-
-		/**
-		 * Executes a task that is managed by VS Code. The returned
-		 * task execution can be used to terminate the task.
-		 *
-		 * @param task the task to execute
-		 */
-		export function executeTask(task: Task): Thenable<TaskExecution>;
-
-		/**
-		 * The currently active task executions or an empty array.
-		 *
-		 * @readonly
-		 */
-		export let taskExecutions: ReadonlyArray<TaskExecution>;
-
-		/**
-		 * Fires when a task starts.
-		 */
-		export const onDidStartTask: Event<TaskStartEvent>;
-
-		/**
-		 * Fires when a task ends.
-		 */
-		export const onDidEndTask: Event<TaskEndEvent>;
+		onDidChangeCommentThreads?: Event<CommentThreadChangedEvent>;
 	}
 
+	namespace workspace {
+		export function registerDocumentCommentProvider(provider: DocumentCommentProvider): Disposable;
+		export function registerWorkspaceCommentProvider(provider: WorkspaceCommentProvider): Disposable;
+	}
 	//#endregion
 
 	//#region Terminal
@@ -453,7 +346,7 @@ declare module 'vscode' {
 
 	export namespace window {
 		/**
-		 * The currently active terminals or an empty array.
+		 * The currently opened terminals or an empty array.
 		 *
 		 * @readonly
 		 */
@@ -486,19 +379,53 @@ declare module 'vscode' {
 
 	//#region Joh: hierarchical document symbols, https://github.com/Microsoft/vscode/issues/34968
 
-	export class HierarchicalSymbolInformation {
-		name: string;
-		kind: SymbolKind;
-		detail: string;
-		location: Location;
-		range: Range;
-		children: HierarchicalSymbolInformation[];
+	export class DocumentSymbol {
 
-		constructor(name: string, detail: string, kind: SymbolKind, location: Location, range: Range);
+		/**
+		 * The name of this symbol.
+		 */
+		name: string;
+
+		/**
+		 * More detail for this symbol, e.g the signature of a function.
+		 */
+		detail: string;
+
+		/**
+		 * The kind of this symbol.
+		 */
+		kind: SymbolKind;
+
+		/**
+		 * The full range of this symbol not including leading/trailing whitespace but everything else.
+		 */
+		fullRange: Range;
+
+		/**
+		 * The range that should be revealed when this symbol is being selected, e.g the name of a function.
+		 * Must be contained by the [`fullRange`](#DocumentSymbol.fullRange).
+		 */
+		gotoRange: Range;
+
+		/**
+		 * Children of this symbol, e.g. properties of a class.
+		 */
+		children: DocumentSymbol[];
+
+		/**
+		 * Creates a new document symbol.
+		 *
+		 * @param name The name of the symbol.
+		 * @param detail Details for the symbol.
+		 * @param kind The kind of the symbol.
+		 * @param fullRange The full range of the symbol.
+		 * @param gotoRange The range that should be reveal.
+		 */
+		constructor(name: string, detail: string, kind: SymbolKind, fullRange: Range, gotoRange: Range);
 	}
 
 	export interface DocumentSymbolProvider {
-		provideDocumentSymbols(document: TextDocument, token: CancellationToken): ProviderResult<HierarchicalSymbolInformation[] | SymbolInformation[]>;
+		provideDocumentSymbols(document: TextDocument, token: CancellationToken): ProviderResult<SymbolInformation[] | DocumentSymbol[]>;
 	}
 
 	//#endregion
@@ -507,6 +434,191 @@ declare module 'vscode' {
 
 	export interface DocumentFilter {
 		exclusive?: boolean;
+	}
+
+	//#endregion
+
+	//#region QuickInput API
+
+	export namespace window {
+
+		/**
+		 * Implementation incomplete. See #49340.
+		 */
+		export function createQuickPick(): QuickPick;
+
+		/**
+		 * Implementation incomplete. See #49340.
+		 */
+		export function createInputBox(): InputBox;
+	}
+
+	export interface QuickInput {
+
+		enabled: boolean;
+
+		busy: boolean;
+
+		ignoreFocusOut: boolean;
+
+		show(): void;
+
+		hide(): void;
+
+		onDidHide: Event<void>;
+
+		dispose(): void;
+	}
+
+	export interface QuickPick extends QuickInput {
+
+		value: string;
+
+		placeholder: string | undefined;
+
+		readonly onDidChangeValue: Event<string>;
+
+		readonly onDidAccept: Event<void>;
+
+		buttons: ReadonlyArray<QuickInputButton>;
+
+		readonly onDidTriggerButton: Event<QuickInputButton>;
+
+		items: ReadonlyArray<QuickPickItem>;
+
+		canSelectMany: boolean;
+
+		matchOnDescription: boolean;
+
+		matchOnDetail: boolean;
+
+		readonly activeItems: ReadonlyArray<QuickPickItem>;
+
+		readonly onDidChangeActive: Event<QuickPickItem[]>;
+
+		readonly selectedItems: ReadonlyArray<QuickPickItem>;
+
+		readonly onDidChangeSelection: Event<QuickPickItem[]>;
+	}
+
+	export interface InputBox extends QuickInput {
+
+		value: string;
+
+		placeholder: string | undefined;
+
+		password: boolean;
+
+		readonly onDidChangeValue: Event<string>;
+
+		readonly onDidAccept: Event<void>;
+
+		buttons: ReadonlyArray<QuickInputButton>;
+
+		readonly onDidTriggerButton: Event<QuickInputButton>;
+
+		prompt: string | undefined;
+
+		validationMessage: string | undefined;
+	}
+
+	export interface QuickInputButton {
+		iconPath: string | Uri | { light: string | Uri; dark: string | Uri } | ThemeIcon;
+		tooltip?: string | undefined;
+	}
+
+	//#endregion
+
+	//#region mjbvz: Unused diagnostics
+	/**
+	 * Additional metadata about the type of diagnostic.
+	 */
+	export enum DiagnosticTag {
+		/**
+		 * Unused or unnecessary code.
+		 */
+		Unnecessary = 1,
+	}
+
+	export interface Diagnostic {
+		/**
+		 * Additional metadata about the type of the diagnostic.
+		 */
+		customTags?: DiagnosticTag[];
+	}
+
+	//#endregion
+
+	//#region mjbvz: File rename events
+	export interface ResourceRenamedEvent {
+		readonly oldResource: Uri;
+		readonly newResource: Uri;
+	}
+
+	export namespace workspace {
+		export const onDidRenameResource: Event<ResourceRenamedEvent>;
+	}
+	//#endregion
+
+	//#region mjbvz: Code action trigger
+
+	/**
+	 * How a [code action provider](#CodeActionProvider) was triggered
+	 */
+	export enum CodeActionTrigger {
+		/**
+		 * Provider was triggered automatically by VS Code.
+		 */
+		Automatic = 1,
+
+		/**
+		 * User requested code actions.
+		 */
+		Manual = 2,
+	}
+
+	interface CodeActionContext {
+		/**
+		 * How the code action provider was triggered.
+		 */
+		triggerKind?: CodeActionTrigger;
+	}
+
+	//#endregion
+
+
+	//#region Matt: WebView Serializer
+
+	/**
+	 * Restore webview panels that have been persisted when vscode shuts down.
+	 */
+	interface WebviewPanelSerializer {
+		/**
+		 * Restore a webview panel from its seriailzed `state`.
+		 *
+		 * Called when a serialized webview first becomes visible.
+		 *
+		 * @param webviewPanel Webview panel to restore. The serializer should take ownership of this panel.
+		 * @param state Persisted state.
+		 *
+		 * @return Thanble indicating that the webview has been fully restored.
+		 */
+		deserializeWebviewPanel(webviewPanel: WebviewPanel, state: any): Thenable<void>;
+	}
+
+	namespace window {
+		/**
+		 * Registers a webview panel serializer.
+		 *
+		 * Extensions that support reviving should have an `"onWebviewPanel:viewType"` activation method and
+		 * make sure that [registerWebviewPanelSerializer](#registerWebviewPanelSerializer) is called during activation.
+		 *
+		 * Only a single serializer may be registered at a time for a given `viewType`.
+		 *
+		 * @param viewType Type of the webview panel that can be serialized.
+		 * @param serializer Webview serializer.
+		 */
+		export function registerWebviewPanelSerializer(viewType: string, serializer: WebviewPanelSerializer): Disposable;
 	}
 
 	//#endregion

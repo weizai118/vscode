@@ -23,7 +23,7 @@ import { BaseEditor } from 'vs/workbench/browser/parts/editor/baseEditor';
 import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
-import { IExtensionManifest, IKeyBinding, IView, IExtensionTipsService, LocalExtensionType } from 'vs/platform/extensionManagement/common/extensionManagement';
+import { IExtensionManifest, IKeyBinding, IView, IExtensionTipsService, LocalExtensionType, IViewContainer } from 'vs/platform/extensionManagement/common/extensionManagement';
 import { ResolvedKeybinding, KeyMod, KeyCode } from 'vs/base/common/keyCodes';
 import { ExtensionsInput } from 'vs/workbench/parts/extensions/common/extensionsInput';
 import { IExtensionsWorkbenchService, IExtensionsViewlet, VIEWLET_ID, IExtension, IExtensionDependencies } from 'vs/workbench/parts/extensions/common/extensions';
@@ -38,18 +38,18 @@ import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
 import { DomScrollableElement } from 'vs/base/browser/ui/scrollbar/scrollableElement';
 import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { Tree } from 'vs/base/parts/tree/browser/treeImpl';
-import { Position } from 'vs/platform/editor/common/editor';
 import { IPartService, Parts } from 'vs/workbench/services/part/common/partService';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { KeybindingLabel } from 'vs/base/browser/ui/keybindingLabel/keybindingLabel';
 import { IContextKeyService, RawContextKey, IContextKey } from 'vs/platform/contextkey/common/contextkey';
-import { Command, ICommandOptions } from 'vs/editor/browser/editorExtensions';
-import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { Command } from 'vs/editor/browser/editorExtensions';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { KeybindingsRegistry } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { Color } from 'vs/base/common/color';
 import { WorkbenchTree } from 'vs/platform/list/browser/listService';
 import { assign } from 'vs/base/common/objects';
 import { INotificationService } from 'vs/platform/notification/common/notification';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 /**  A context key that is set when an extension editor webview has focus. */
 export const KEYBINDING_CONTEXT_EXTENSIONEDITOR_WEBVIEW_FOCUS = new RawContextKey<boolean>('extensionEditorWebviewFocus', undefined);
@@ -99,9 +99,11 @@ class NavBar {
 		this.actionbar = new ActionBar(element, { animated: false });
 	}
 
-	push(id: string, label: string): void {
+	push(id: string, label: string, tooltip: string): void {
 		const run = () => this._update(id);
 		const action = new Action(id, label, null, true, run);
+
+		action.tooltip = tooltip;
 
 		this.actions.push(action);
 		this.actionbar.push(action);
@@ -263,7 +265,7 @@ export class ExtensionEditor extends BaseEditor {
 		this.content = append(body, $('.content'));
 	}
 
-	setInput(input: ExtensionsInput, options: EditorOptions): TPromise<void> {
+	setInput(input: ExtensionsInput, options: EditorOptions, token: CancellationToken): Thenable<void> {
 		this.editorLoadComplete = false;
 		const extension = input.extension;
 
@@ -371,35 +373,18 @@ export class ExtensionEditor extends BaseEditor {
 
 		this.navbar.clear();
 		this.navbar.onChange(this.onNavbarChange.bind(this, extension), this, this.transientDisposables);
-		this.navbar.push(NavbarSection.Readme, localize('details', "Details"));
-		this.navbar.push(NavbarSection.Contributions, localize('contributions', "Contributions"));
-		this.navbar.push(NavbarSection.Changelog, localize('changelog', "Changelog"));
-		this.navbar.push(NavbarSection.Dependencies, localize('dependencies', "Dependencies"));
+		this.navbar.push(NavbarSection.Readme, localize('details', "Details"), localize('detailstooltip', "Extension details, rendered from the extension's 'README.md' file"));
+		this.navbar.push(NavbarSection.Contributions, localize('contributions', "Contributions"), localize('contributionstooltip', "Lists contributions to VS Code by this extension"));
+		this.navbar.push(NavbarSection.Changelog, localize('changelog', "Changelog"), localize('changelogtooltip', "Extension update history, rendered from the extension's 'CHANGELOG.md' file"));
+		this.navbar.push(NavbarSection.Dependencies, localize('dependencies', "Dependencies"), localize('dependenciestooltip', "Lists extensions this extension depends on"));
 
 		this.editorLoadComplete = true;
-		return super.setInput(input, options);
-	}
-
-	changePosition(position: Position): void {
-		this.navbar.update();
-		super.changePosition(position);
+		return super.setInput(input, options, token);
 	}
 
 	showFind(): void {
 		if (this.activeWebview) {
 			this.activeWebview.showFind();
-		}
-	}
-
-	public showNextFindTerm() {
-		if (this.activeWebview) {
-			this.activeWebview.showNextFindTerm();
-		}
-	}
-
-	public showPreviousFindTerm() {
-		if (this.activeWebview) {
-			this.activeWebview.showPreviousFindTerm();
 		}
 	}
 
@@ -482,6 +467,7 @@ export class ExtensionEditor extends BaseEditor {
 					this.renderColors(content, manifest, layout),
 					this.renderJSONValidation(content, manifest, layout),
 					this.renderDebuggers(content, manifest, layout),
+					this.renderViewContainers(content, manifest, layout),
 					this.renderViews(content, manifest, layout),
 					this.renderLocalizations(content, manifest, layout)
 				];
@@ -612,6 +598,32 @@ export class ExtensionEditor extends BaseEditor {
 		return true;
 	}
 
+	private renderViewContainers(container: HTMLElement, manifest: IExtensionManifest, onDetailsToggle: Function): boolean {
+		const contributes = manifest.contributes;
+		const contrib = contributes && contributes.viewsContainers || {};
+
+		let viewContainers = <{ id: string, title: string, location: string }[]>Object.keys(contrib).reduce((result, location) => {
+			let viewContainersForLocation: IViewContainer[] = contrib[location];
+			result.push(...viewContainersForLocation.map(viewContainer => ({ ...viewContainer, location })));
+			return result;
+		}, []);
+
+		if (!viewContainers.length) {
+			return false;
+		}
+
+		const details = $('details', { open: true, ontoggle: onDetailsToggle },
+			$('summary', null, localize('viewContainers', "View Containers ({0})", viewContainers.length)),
+			$('table', null,
+				$('tr', null, $('th', null, localize('view container id', "ID")), $('th', null, localize('view container title', "Title")), $('th', null, localize('view container location', "Where"))),
+				...viewContainers.map(viewContainer => $('tr', null, $('td', null, viewContainer.id), $('td', null, viewContainer.title), $('td', null, viewContainer.location)))
+			)
+		);
+
+		append(container, details);
+		return true;
+	}
+
 	private renderViews(container: HTMLElement, manifest: IExtensionManifest, onDetailsToggle: Function): boolean {
 		const contributes = manifest.contributes;
 		const contrib = contributes && contributes.views || {};
@@ -650,7 +662,7 @@ export class ExtensionEditor extends BaseEditor {
 			$('summary', null, localize('localizations', "Localizations ({0})", localizations.length)),
 			$('table', null,
 				$('tr', null, $('th', null, localize('localizations language id', "Language Id")), $('th', null, localize('localizations language name', "Language Name")), $('th', null, localize('localizations localized language name', "Language Name (Localized)"))),
-				...localizations.map(localization => $('tr', null, $('td', null, localization.languageId), $('td', null, localization.languageName), $('td', null, localization.languageNameLocalized)))
+				...localizations.map(localization => $('tr', null, $('td', null, localization.languageId), $('td', null, localization.languageName), $('td', null, localization.localizedLanguageName)))
 			)
 		);
 
@@ -964,9 +976,9 @@ class ShowExtensionEditorFindCommand extends Command {
 	}
 
 	private getExtensionEditor(accessor: ServicesAccessor): ExtensionEditor {
-		const activeEditor = accessor.get(IWorkbenchEditorService).getActiveEditor() as ExtensionEditor;
-		if (activeEditor instanceof ExtensionEditor) {
-			return activeEditor;
+		const activeControl = accessor.get(IEditorService).activeControl as ExtensionEditor;
+		if (activeControl instanceof ExtensionEditor) {
+			return activeControl;
 		}
 		return null;
 	}
@@ -979,46 +991,3 @@ const showCommand = new ShowExtensionEditorFindCommand({
 	}
 });
 KeybindingsRegistry.registerCommandAndKeybindingRule(showCommand.toCommandAndKeybindingRule(KeybindingsRegistry.WEIGHT.editorContrib()));
-
-class ShowExtensionEditorFindTermCommand extends Command {
-	constructor(opts: ICommandOptions, private _next: boolean) {
-		super(opts);
-	}
-
-	public runCommand(accessor: ServicesAccessor, args: any): void {
-		const extensionEditor = this.getExtensionEditor(accessor);
-		if (extensionEditor) {
-			if (this._next) {
-				extensionEditor.showNextFindTerm();
-			} else {
-				extensionEditor.showPreviousFindTerm();
-			}
-		}
-	}
-
-	private getExtensionEditor(accessor: ServicesAccessor): ExtensionEditor {
-		const activeEditor = accessor.get(IWorkbenchEditorService).getActiveEditor() as ExtensionEditor;
-		if (activeEditor instanceof ExtensionEditor) {
-			return activeEditor;
-		}
-		return null;
-	}
-}
-
-const showNextFindTermCommand = new ShowExtensionEditorFindTermCommand({
-	id: 'editor.action.extensioneditor.showNextFindTerm',
-	precondition: KEYBINDING_CONTEXT_EXTENSIONEDITOR_FIND_WIDGET_INPUT_FOCUSED,
-	kbOpts: {
-		primary: KeyMod.Alt | KeyCode.DownArrow
-	}
-}, true);
-KeybindingsRegistry.registerCommandAndKeybindingRule(showNextFindTermCommand.toCommandAndKeybindingRule(KeybindingsRegistry.WEIGHT.editorContrib()));
-
-const showPreviousFindTermCommand = new ShowExtensionEditorFindTermCommand({
-	id: 'editor.action.extensioneditor.showPreviousFindTerm',
-	precondition: KEYBINDING_CONTEXT_EXTENSIONEDITOR_FIND_WIDGET_INPUT_FOCUSED,
-	kbOpts: {
-		primary: KeyMod.Alt | KeyCode.UpArrow
-	}
-}, false);
-KeybindingsRegistry.registerCommandAndKeybindingRule(showPreviousFindTermCommand.toCommandAndKeybindingRule(KeybindingsRegistry.WEIGHT.editorContrib()));

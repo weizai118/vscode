@@ -24,17 +24,16 @@ import { ContributableActionProvider } from 'vs/workbench/browser/actions';
 import * as labels from 'vs/base/common/labels';
 import { ITextFileService, AutoSaveMode } from 'vs/workbench/services/textfile/common/textfiles';
 import { Registry } from 'vs/platform/registry/common/platform';
-import { IResourceInput, IEditorInput } from 'vs/platform/editor/common/editor';
+import { IResourceInput } from 'vs/platform/editor/common/editor';
 import { IModeService } from 'vs/editor/common/services/modeService';
 import { getIconClasses } from 'vs/workbench/browser/labels';
 import { IModelService } from 'vs/editor/common/services/modelService';
-import { EditorInput, IWorkbenchEditorConfiguration } from 'vs/workbench/common/editor';
+import { EditorInput, IWorkbenchEditorConfiguration, IEditorInput } from 'vs/workbench/common/editor';
 import { Component } from 'vs/workbench/common/component';
 import { Event, Emitter } from 'vs/base/common/event';
 import { IPartService } from 'vs/workbench/services/part/common/partService';
 import { QuickOpenHandler, QuickOpenHandlerDescriptor, IQuickOpenRegistry, Extensions, EditorQuickOpenEntry, CLOSE_ON_FOCUS_LOST_CONFIG } from 'vs/workbench/browser/quickopen';
 import * as errors from 'vs/base/common/errors';
-import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IPickOpenEntry, IFilePickOpenEntry, IQuickOpenService, IPickOptions, IShowOptions, IPickOpenItem } from 'vs/platform/quickOpen/common/quickOpen';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
@@ -56,6 +55,8 @@ import { Schemas } from 'vs/base/common/network';
 import Severity from 'vs/base/common/severity';
 import { INotificationService } from 'vs/platform/notification/common/notification';
 import { Dimension, addClass } from 'vs/base/browser/dom';
+import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from 'vs/workbench/services/editor/common/editorService';
+import { IEditorGroupsService } from 'vs/workbench/services/group/common/editorGroupsService';
 
 const HELP_PREFIX = '?';
 
@@ -96,12 +97,12 @@ export class QuickOpenController extends Component implements IQuickOpenService 
 	private promisesToCompleteOnHide: ValueCallback[];
 	private previousActiveHandlerDescriptor: QuickOpenHandlerDescriptor;
 	private actionProvider = new ContributableActionProvider();
-	private visibilityChangeTimeoutHandle: number;
 	private closeOnFocusLost: boolean;
 	private editorHistoryHandler: EditorHistoryHandler;
 
 	constructor(
-		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
+		@IEditorService private editorService: IEditorService,
+		@IEditorGroupsService private editorGroupService: IEditorGroupsService,
 		@INotificationService private notificationService: INotificationService,
 		@IContextKeyService private contextKeyService: IContextKeyService,
 		@IConfigurationService private configurationService: IConfigurationService,
@@ -439,19 +440,11 @@ export class QuickOpenController extends Component implements IQuickOpenService 
 	}
 
 	private emitQuickOpenVisibilityChange(isVisible: boolean): void {
-		if (this.visibilityChangeTimeoutHandle) {
-			window.clearTimeout(this.visibilityChangeTimeoutHandle);
+		if (isVisible) {
+			this._onShow.fire();
+		} else {
+			this._onHide.fire();
 		}
-
-		this.visibilityChangeTimeoutHandle = setTimeout(() => {
-			if (isVisible) {
-				this._onShow.fire();
-			} else {
-				this._onHide.fire();
-			}
-
-			this.visibilityChangeTimeoutHandle = void 0;
-		}, 100 /* to prevent flashing, we accumulate visibility changes over a timeout of 100ms */);
 	}
 
 	public show(prefix?: string, options?: IShowOptions): TPromise<void> {
@@ -514,7 +507,7 @@ export class QuickOpenController extends Component implements IQuickOpenService 
 					if (!quickNavigateConfiguration) {
 						autoFocus = { autoFocusFirstEntry: true };
 					} else {
-						const visibleEditorCount = this.editorService.getVisibleEditors().length;
+						const visibleEditorCount = this.editorService.visibleEditors.length;
 						autoFocus = { autoFocusFirstEntry: visibleEditorCount === 0, autoFocusSecondEntry: visibleEditorCount !== 0 };
 					}
 				}
@@ -582,7 +575,7 @@ export class QuickOpenController extends Component implements IQuickOpenService 
 		}
 
 		if (reason !== HideReason.FOCUS_LOST) {
-			this.restoreFocus(); // focus back to editor unless user clicked somewhere else
+			this.editorGroupService.activeGroup.focus(); // focus back to editor group unless user clicked somewhere else
 		}
 
 		// Reset context keys
@@ -630,15 +623,6 @@ export class QuickOpenController extends Component implements IQuickOpenService 
 		}
 
 		return new QuickOpenModel(entries, this.actionProvider);
-	}
-
-	private restoreFocus(): void {
-
-		// Try to focus active editor
-		const editor = this.editorService.getActiveEditor();
-		if (editor) {
-			editor.focus();
-		}
 	}
 
 	private onType(value: string): void {
@@ -1184,7 +1168,7 @@ export class EditorHistoryEntry extends EditorQuickOpenEntry {
 
 	constructor(
 		input: IEditorInput | IResourceInput,
-		@IWorkbenchEditorService editorService: IWorkbenchEditorService,
+		@IEditorService editorService: IEditorService,
 		@IModeService private modeService: IModeService,
 		@IModelService private modelService: IModelService,
 		@ITextFileService private textFileService: ITextFileService,
@@ -1206,7 +1190,7 @@ export class EditorHistoryEntry extends EditorQuickOpenEntry {
 			const resourceInput = input as IResourceInput;
 			this.resource = resourceInput.resource;
 			this.label = labels.getBaseLabel(resourceInput.resource);
-			this.description = labels.getPathLabel(resources.dirname(this.resource), contextService, environmentService);
+			this.description = labels.getPathLabel(resources.dirname(this.resource), environmentService, contextService);
 			this.dirty = this.resource && this.textFileService.isDirty(this.resource);
 
 			if (this.dirty && this.textFileService.getAutoSaveMode() === AutoSaveMode.AFTER_SHORT_DELAY) {
@@ -1251,9 +1235,9 @@ export class EditorHistoryEntry extends EditorQuickOpenEntry {
 			const pinned = !this.configurationService.getValue<IWorkbenchEditorConfiguration>().workbench.editor.enablePreviewFromQuickOpen || context.keymods.alt;
 
 			if (this.input instanceof EditorInput) {
-				this.editorService.openEditor(this.input, { pinned }, sideBySide).done(null, errors.onUnexpectedError);
+				this.editorService.openEditor(this.input, { pinned }, sideBySide ? SIDE_GROUP : ACTIVE_GROUP);
 			} else {
-				this.editorService.openEditor({ resource: (this.input as IResourceInput).resource, options: { pinned } }, sideBySide);
+				this.editorService.openEditor({ resource: (this.input as IResourceInput).resource, options: { pinned } }, sideBySide ? SIDE_GROUP : ACTIVE_GROUP);
 			}
 
 			return true;

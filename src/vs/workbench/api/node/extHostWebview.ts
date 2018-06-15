@@ -7,7 +7,7 @@ import { MainContext, MainThreadWebviewsShape, IMainContext, ExtHostWebviewsShap
 import * as vscode from 'vscode';
 import { Event, Emitter } from 'vs/base/common/event';
 import * as typeConverters from 'vs/workbench/api/node/extHostTypeConverters';
-import { Position } from 'vs/platform/editor/common/editor';
+import { EditorViewColumn } from 'vs/workbench/api/shared/editor';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { Disposable } from './extHostTypes';
 import URI from 'vs/base/common/uri';
@@ -19,7 +19,7 @@ export class ExtHostWebview implements vscode.Webview {
 	private _options: vscode.WebviewOptions;
 	private _isDisposed: boolean = false;
 
-	readonly _onMessageEmitter = new Emitter<any>();
+	public readonly _onMessageEmitter = new Emitter<any>();
 	public readonly onDidReceiveMessage: Event<any> = this._onMessageEmitter.event;
 
 	constructor(
@@ -32,16 +32,16 @@ export class ExtHostWebview implements vscode.Webview {
 		this._options = options;
 	}
 
-	dispose() {
+	public dispose() {
 		this._onMessageEmitter.dispose();
 	}
 
-	get html(): string {
+	public get html(): string {
 		this.assertNotDisposed();
 		return this._html;
 	}
 
-	set html(value: string) {
+	public set html(value: string) {
 		this.assertNotDisposed();
 		if (this._html !== value) {
 			this._html = value;
@@ -49,9 +49,15 @@ export class ExtHostWebview implements vscode.Webview {
 		}
 	}
 
-	get options(): vscode.WebviewOptions {
+	public get options(): vscode.WebviewOptions {
 		this.assertNotDisposed();
 		return this._options;
+	}
+
+	public set options(newOptions: vscode.WebviewOptions) {
+		this.assertNotDisposed();
+		this._proxy.$setOptions(this._handle, newOptions);
+		this._options = newOptions;
 	}
 
 	public postMessage(message: any): Thenable<boolean> {
@@ -248,7 +254,7 @@ export class ExtHostWebviews implements ExtHostWebviewsShape {
 		}
 	}
 
-	$onDidChangeWebviewPanelViewState(handle: WebviewPanelHandle, visible: boolean, position: Position): void {
+	$onDidChangeWebviewPanelViewState(handle: WebviewPanelHandle, visible: boolean, position: EditorViewColumn): void {
 		const panel = this.getWebviewPanel(handle);
 		if (panel) {
 			const viewColumn = typeConverters.ViewColumn.to(position);
@@ -274,7 +280,7 @@ export class ExtHostWebviews implements ExtHostWebviewsShape {
 		viewType: string,
 		title: string,
 		state: any,
-		position: Position,
+		position: EditorViewColumn,
 		options: vscode.WebviewOptions & vscode.WebviewPanelOptions
 	): Thenable<void> {
 		const serializer = this._serializers.get(viewType);
@@ -286,22 +292,6 @@ export class ExtHostWebviews implements ExtHostWebviewsShape {
 		const revivedPanel = new ExtHostWebviewPanel(webviewHandle, this._proxy, viewType, title, typeConverters.ViewColumn.to(position), options, webview);
 		this._webviewPanels.set(webviewHandle, revivedPanel);
 		return serializer.deserializeWebviewPanel(revivedPanel, state);
-	}
-
-	$serializeWebviewPanel(
-		webviewHandle: WebviewPanelHandle
-	): Thenable<any> {
-		const panel = this.getWebviewPanel(webviewHandle);
-		if (!panel) {
-			return TPromise.as(undefined);
-		}
-
-		const serialzer = this._serializers.get(panel.viewType);
-		if (!serialzer) {
-			return TPromise.as(undefined);
-		}
-
-		return serialzer.serializeWebviewPanel(panel);
 	}
 
 	private getWebviewPanel(handle: WebviewPanelHandle): ExtHostWebviewPanel | undefined {

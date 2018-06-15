@@ -950,41 +950,6 @@ export class HideTerminalFindWidgetAction extends Action {
 	}
 }
 
-export class ShowNextFindTermTerminalFindWidgetAction extends Action {
-
-	public static readonly ID = 'workbench.action.terminal.findWidget.history.showNext';
-	public static readonly LABEL = nls.localize('nextTerminalFindTerm', "Show Next Find Term");
-
-	constructor(
-		id: string, label: string,
-		@ITerminalService private terminalService: ITerminalService
-	) {
-		super(id, label);
-	}
-
-	public run(): TPromise<any> {
-		return TPromise.as(this.terminalService.showNextFindTermFindWidget());
-	}
-}
-
-export class ShowPreviousFindTermTerminalFindWidgetAction extends Action {
-
-	public static readonly ID = 'workbench.action.terminal.findWidget.history.showPrevious';
-	public static readonly LABEL = nls.localize('previousTerminalFindTerm', "Show Previous Find Term");
-
-	constructor(
-		id: string, label: string,
-		@ITerminalService private terminalService: ITerminalService
-	) {
-		super(id, label);
-	}
-
-	public run(): TPromise<any> {
-		return TPromise.as(this.terminalService.showPreviousFindTermFindWidget());
-	}
-}
-
-
 export class QuickOpenActionTermContributor extends ActionBarContributor {
 
 	constructor(
@@ -1125,6 +1090,48 @@ export class SelectToNextCommandAction extends Action {
 		const instance = this.terminalService.getActiveInstance();
 		if (instance) {
 			instance.commandTracker.selectToNextCommand();
+			instance.focus();
+		}
+		return TPromise.as(void 0);
+	}
+}
+
+export class SelectToPreviousLineAction extends Action {
+	public static readonly ID = 'workbench.action.terminal.selectToPreviousLine';
+	public static readonly LABEL = nls.localize('workbench.action.terminal.selectToPreviousLine', "Select To Previous Line");
+
+	constructor(
+		id: string, label: string,
+		@ITerminalService private terminalService: ITerminalService
+	) {
+		super(id, label);
+	}
+
+	public run(): TPromise<any> {
+		const instance = this.terminalService.getActiveInstance();
+		if (instance) {
+			instance.commandTracker.selectToPreviousLine();
+			instance.focus();
+		}
+		return TPromise.as(void 0);
+	}
+}
+
+export class SelectToNextLineAction extends Action {
+	public static readonly ID = 'workbench.action.terminal.selectToNextLine';
+	public static readonly LABEL = nls.localize('workbench.action.terminal.selectToNextLine', "Select To Next Line");
+
+	constructor(
+		id: string, label: string,
+		@ITerminalService private terminalService: ITerminalService
+	) {
+		super(id, label);
+	}
+
+	public run(): TPromise<any> {
+		const instance = this.terminalService.getActiveInstance();
+		if (instance) {
+			instance.commandTracker.selectToNextLine();
 			instance.focus();
 		}
 		return TPromise.as(void 0);

@@ -6,12 +6,14 @@
 
 import * as modes from 'vs/editor/common/modes';
 import * as types from './extHostTypes';
-import { Position as EditorPosition, ITextEditorOptions } from 'vs/platform/editor/common/editor';
+import * as search from 'vs/workbench/parts/search/common/search';
+import { ITextEditorOptions } from 'vs/platform/editor/common/editor';
+import { EditorViewColumn } from 'vs/workbench/api/shared/editor';
 import { IDecorationOptions } from 'vs/editor/common/editorCommon';
 import { EndOfLineSequence } from 'vs/editor/common/model';
 import * as vscode from 'vscode';
 import URI from 'vs/base/common/uri';
-import { ProgressLocation as MainProgressLocation } from 'vs/platform/progress/common/progress';
+import { ProgressLocation as MainProgressLocation } from 'vs/workbench/services/progress/common/progress';
 import { SaveReason } from 'vs/workbench/services/textfile/common/textfiles';
 import { IPosition } from 'vs/editor/common/core/position';
 import { IRange } from 'vs/editor/common/core/range';
@@ -20,7 +22,8 @@ import * as htmlContent from 'vs/base/common/htmlContent';
 import { IRelativePattern } from 'vs/base/common/glob';
 import * as languageSelector from 'vs/editor/common/modes/languageSelector';
 import { WorkspaceEditDto, ResourceTextEditDto } from 'vs/workbench/api/node/extHost.protocol';
-import { MarkerSeverity, IRelatedInformation, IMarkerData } from 'vs/platform/markers/common/markers';
+import { MarkerSeverity, IRelatedInformation, IMarkerData, MarkerTag } from 'vs/platform/markers/common/markers';
+import { ACTIVE_GROUP, SIDE_GROUP } from 'vs/workbench/services/editor/common/editorService';
 
 export interface PositionLike {
 	line: number;
@@ -88,6 +91,16 @@ export namespace Position {
 	}
 }
 
+export namespace DiagnosticTag {
+	export function from(value: vscode.DiagnosticTag): MarkerTag {
+		switch (value) {
+			case types.DiagnosticTag.Unnecessary:
+				return MarkerTag.Unnecessary;
+		}
+		return undefined;
+	}
+}
+
 export namespace Diagnostic {
 	export function from(value: vscode.Diagnostic): IMarkerData {
 		return {
@@ -96,7 +109,8 @@ export namespace Diagnostic {
 			source: value.source,
 			code: String(value.code),
 			severity: DiagnosticSeverity.from(value.severity),
-			relatedInformation: value.relatedInformation && value.relatedInformation.map(DiagnosticRelatedInformation.from)
+			relatedInformation: value.relatedInformation && value.relatedInformation.map(DiagnosticRelatedInformation.from),
+			customTags: Array.isArray(value.customTags) ? value.customTags.map(DiagnosticTag.from) : undefined,
 		};
 	}
 }
@@ -145,31 +159,23 @@ export namespace DiagnosticSeverity {
 }
 
 export namespace ViewColumn {
-	export function from(column?: vscode.ViewColumn): EditorPosition {
-		let editorColumn = EditorPosition.ONE;
-		if (typeof column !== 'number') {
-			// stick with ONE
-		} else if (column === <number>types.ViewColumn.Two) {
-			editorColumn = EditorPosition.TWO;
-		} else if (column === <number>types.ViewColumn.Three) {
-			editorColumn = EditorPosition.THREE;
-		} else if (column === <number>types.ViewColumn.Active) {
-			editorColumn = undefined;
+	export function from(column?: vscode.ViewColumn): EditorViewColumn {
+		if (typeof column === 'number' && column >= types.ViewColumn.One) {
+			return column - 1; // adjust zero index (ViewColumn.ONE => 0)
 		}
-		return editorColumn;
+
+		if (column === types.ViewColumn.Beside) {
+			return SIDE_GROUP;
+		}
+
+		return ACTIVE_GROUP; // default is always the active group
 	}
 
-	export function to(position?: EditorPosition): vscode.ViewColumn {
-		if (typeof position !== 'number') {
-			return undefined;
+	export function to(position?: EditorViewColumn): vscode.ViewColumn {
+		if (typeof position === 'number' && position >= 0) {
+			return position + 1; // adjust to index (ViewColumn.ONE => 1)
 		}
-		if (position === EditorPosition.ONE) {
-			return <number>types.ViewColumn.One;
-		} else if (position === EditorPosition.TWO) {
-			return <number>types.ViewColumn.Two;
-		} else if (position === EditorPosition.THREE) {
-			return <number>types.ViewColumn.Three;
-		}
+
 		return undefined;
 	}
 }
@@ -344,16 +350,16 @@ export namespace SymbolKind {
 	}
 }
 
-export namespace SymbolInformation {
-	export function from(info: vscode.SymbolInformation): modes.SymbolInformation {
-		return <modes.SymbolInformation>{
+export namespace WorkspaceSymbol {
+	export function from(info: vscode.SymbolInformation): search.IWorkspaceSymbol {
+		return <search.IWorkspaceSymbol>{
 			name: info.name,
 			kind: SymbolKind.from(info.kind),
 			containerName: info.containerName,
 			location: location.from(info.location)
 		};
 	}
-	export function to(info: modes.SymbolInformation): types.SymbolInformation {
+	export function to(info: search.IWorkspaceSymbol): types.SymbolInformation {
 		return new types.SymbolInformation(
 			info.name,
 			SymbolKind.to(info.kind),
@@ -363,13 +369,13 @@ export namespace SymbolInformation {
 	}
 }
 
-export namespace HierarchicalSymbolInformation {
-	export function from(info: vscode.HierarchicalSymbolInformation): modes.SymbolInformation {
-		let result: modes.SymbolInformation = {
+export namespace DocumentSymbol {
+	export function from(info: vscode.DocumentSymbol): modes.DocumentSymbol {
+		let result: modes.DocumentSymbol = {
 			name: info.name,
 			detail: info.detail,
-			location: location.from(info.location),
-			definingRange: Range.from(info.range),
+			fullRange: Range.from(info.fullRange),
+			identifierRange: Range.from(info.gotoRange),
 			kind: SymbolKind.from(info.kind)
 		};
 		if (info.children) {
@@ -377,16 +383,16 @@ export namespace HierarchicalSymbolInformation {
 		}
 		return result;
 	}
-	export function to(info: modes.SymbolInformation): types.HierarchicalSymbolInformation {
-		let result = new types.HierarchicalSymbolInformation(
+	export function to(info: modes.DocumentSymbol): vscode.DocumentSymbol {
+		let result = new types.DocumentSymbol(
 			info.name,
-			SymbolKind.to(info.kind),
 			info.detail,
-			location.to(info.location),
-			Range.to(info.definingRange)
+			SymbolKind.to(info.kind),
+			Range.to(info.fullRange),
+			Range.to(info.identifierRange),
 		);
 		if (info.children) {
-			result.children = info.children.map(to);
+			result.children = info.children.map(to) as any;
 		}
 		return result;
 	}

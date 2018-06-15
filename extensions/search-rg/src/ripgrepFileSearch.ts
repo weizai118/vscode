@@ -4,12 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as cp from 'child_process';
-import * as path from 'path';
 import { Readable } from 'stream';
 import { NodeStringDecoder, StringDecoder } from 'string_decoder';
 import * as vscode from 'vscode';
 import { rgPath } from 'vscode-ripgrep';
 import { normalizeNFC, normalizeNFD } from './normalization';
+import { anchorGlob } from './ripgrepHelpers';
 import { rgErrorMsgForDisplay } from './ripgrepTextSearch';
 
 const isMac = process.platform === 'darwin';
@@ -18,19 +18,30 @@ const isMac = process.platform === 'darwin';
 const rgDiskPath = rgPath.replace(/\bnode_modules\.asar\b/, 'node_modules.asar.unpacked');
 
 export class RipgrepFileSearchEngine {
-	private isDone = false;
 	private rgProc: cp.ChildProcess;
 	private killRgProcFn: (code?: number) => void;
 
-	constructor() {
+	constructor(private outputChannel: vscode.OutputChannel) {
 		this.killRgProcFn = () => this.rgProc && this.rgProc.kill();
+		process.once('exit', this.killRgProcFn);
 	}
 
-	provideFileSearchResults(options: vscode.SearchOptions, progress: vscode.Progress<vscode.Uri>, token: vscode.CancellationToken): Thenable<void> {
+	private dispose() {
+		process.removeListener('exit', this.killRgProcFn);
+	}
+
+	provideFileSearchResults(options: vscode.SearchOptions, progress: vscode.Progress<string>, token: vscode.CancellationToken): Thenable<void> {
+		this.outputChannel.appendLine(`provideFileSearchResults ${JSON.stringify({
+			...options,
+			...{
+				folder: options.folder.toString()
+			}
+		})}`);
+
 		return new Promise((resolve, reject) => {
 			let isDone = false;
 			const cancel = () => {
-				this.isDone = true;
+				isDone = true;
 				this.rgProc.kill();
 			};
 			token.onCancellationRequested(cancel);
@@ -39,14 +50,13 @@ export class RipgrepFileSearchEngine {
 
 			const cwd = options.folder.fsPath;
 
-			// TODO logging
-			// const escapedArgs = rgArgs
-			// 	.map(arg => arg.match(/^-/) ? arg : `'${arg}'`)
-			// 	.join(' ');
-			// let rgCmd = `rg ${escapedArgs}\n - cwd: ${cwd}`;
+			const escapedArgs = rgArgs
+				.map(arg => arg.match(/^-/) ? arg : `'${arg}'`)
+				.join(' ');
+			this.outputChannel.appendLine(`rg ${escapedArgs}\n - cwd: ${cwd}\n`);
 
 			this.rgProc = cp.spawn(rgDiskPath, rgArgs, { cwd });
-			process.once('exit', this.killRgProcFn);
+
 			this.rgProc.on('error', e => {
 				console.log(e);
 				reject(e);
@@ -79,11 +89,10 @@ export class RipgrepFileSearchEngine {
 				}
 
 				relativeFiles.forEach(relativeFile => {
-					progress.report(vscode.Uri.file(path.join(cwd, relativeFile)));
+					progress.report(relativeFile);
 				});
 
 				if (last) {
-					process.removeListener('exit', this.killRgProcFn);
 					if (isDone) {
 						resolve();
 					} else {
@@ -97,35 +106,45 @@ export class RipgrepFileSearchEngine {
 					}
 				}
 			});
-		});
+		}).then(
+			() => this.dispose(),
+			err => {
+				this.dispose();
+				return Promise.reject(err);
+			});
 	}
 
 	private collectStdout(cmd: cp.ChildProcess, cb: (err: Error, stdout?: string, last?: boolean) => void): void {
-		let done = (err: Error, stdout?: string, last?: boolean) => {
+		let onData = (err: Error, stdout?: string, last?: boolean) => {
 			if (err || last) {
-				done = () => { };
+				onData = () => { };
 			}
 
 			cb(err, stdout, last);
 		};
 
-		this.forwardData(cmd.stdout, done);
+		if (cmd.stdout) {
+			this.forwardData(cmd.stdout, onData);
+		} else {
+			this.outputChannel.appendLine('stdout is null');
+		}
+
 		const stderr = this.collectData(cmd.stderr);
 
 		let gotData = false;
 		cmd.stdout.once('data', () => gotData = true);
 
 		cmd.on('error', (err: Error) => {
-			done(err);
+			onData(err);
 		});
 
 		cmd.on('close', (code: number) => {
 			// ripgrep returns code=1 when no results are found
 			let stderrText, displayMsg: string;
 			if (!gotData && (stderrText = this.decodeData(stderr)) && (displayMsg = rgErrorMsgForDisplay(stderrText))) {
-				done(new Error(`command failed with error code ${code}: ${displayMsg}`));
+				onData(new Error(`command failed with error code ${code}: ${displayMsg}`));
 			} else {
-				done(null, '', true);
+				onData(null, '', true);
 			}
 		});
 	}
@@ -156,7 +175,7 @@ function getRgArgs(options: vscode.FileSearchOptions): string[] {
 	const args = ['--files', '--hidden', '--case-sensitive'];
 
 	options.includes.forEach(globArg => {
-		const inclusion = anchor(globArg);
+		const inclusion = anchorGlob(globArg);
 		args.push('-g', inclusion);
 		if (isMac) {
 			const normalized = normalizeNFD(inclusion);
@@ -167,7 +186,7 @@ function getRgArgs(options: vscode.FileSearchOptions): string[] {
 	});
 
 	options.excludes.forEach(globArg => {
-		const exclusion = `!${anchor(globArg)}`;
+		const exclusion = `!${anchorGlob(globArg)}`;
 		args.push('-g', exclusion);
 		if (isMac) {
 			const normalized = normalizeNFD(exclusion);
@@ -195,8 +214,4 @@ function getRgArgs(options: vscode.FileSearchOptions): string[] {
 	args.push('.');
 
 	return args;
-}
-
-function anchor(glob: string) {
-	return glob.startsWith('**') || glob.startsWith('/') ? glob : `/${glob}`;
 }

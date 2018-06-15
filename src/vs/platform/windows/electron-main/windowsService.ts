@@ -360,7 +360,7 @@ export class WindowsService implements IWindowsService, IURLHandler, IDisposable
 		return TPromise.as(null);
 	}
 
-	openWindow(paths: string[], options?: { forceNewWindow?: boolean, forceReuseWindow?: boolean, forceOpenWorkspaceAsFile?: boolean }): TPromise<void> {
+	openWindow(windowId: number, paths: string[], options?: { forceNewWindow?: boolean, forceReuseWindow?: boolean, forceOpenWorkspaceAsFile?: boolean }): TPromise<void> {
 		this.logService.trace('windowsService#openWindow');
 		if (!paths || !paths.length) {
 			return TPromise.as(null);
@@ -368,6 +368,7 @@ export class WindowsService implements IWindowsService, IURLHandler, IDisposable
 
 		this.windowsMainService.open({
 			context: OpenContext.API,
+			contextWindowId: windowId,
 			cli: this.environmentService.args,
 			pathsToOpen: paths,
 			forceNewWindow: options && options.forceNewWindow,
@@ -459,13 +460,14 @@ export class WindowsService implements IWindowsService, IURLHandler, IDisposable
 		const lastActiveWindow = this.windowsMainService.getFocusedWindow() || this.windowsMainService.getLastActiveWindow();
 
 		const detail = nls.localize('aboutDetail',
-			"Version {0}\nCommit {1}\nDate {2}\nShell {3}\nRenderer {4}\nNode {5}\nArchitecture {6}",
+			"Version: {0}\nCommit: {1}\nDate: {2}\nElectron: {3}\nChrome: {4}\nNode.js: {5}\nV8: {6}\nArchitecture: {7}",
 			app.getVersion(),
 			product.commit || 'Unknown',
 			product.date || 'Unknown',
 			process.versions['electron'],
 			process.versions['chrome'],
 			process.versions['node'],
+			process.versions['v8'],
 			process.arch
 		);
 

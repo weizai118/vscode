@@ -118,22 +118,22 @@ function appendEditorTitleContextMenuItem(id: string, title: string, when: Conte
 
 // Editor Title Menu for Conflict Resolution
 appendSaveConflictEditorTitleAction('workbench.files.action.acceptLocalChanges', nls.localize('acceptLocalChanges', "Use your changes and overwrite disk contents"), {
-	light: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/check.svg`)).fsPath,
-	dark: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/check-inverse.svg`)).fsPath
+	light: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/check.svg`)),
+	dark: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/check-inverse.svg`))
 }, -10, acceptLocalChangesCommand);
 appendSaveConflictEditorTitleAction('workbench.files.action.revertLocalChanges', nls.localize('revertLocalChanges', "Discard your changes and revert to content on disk"), {
-	light: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/undo.svg`)).fsPath,
-	dark: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/undo-inverse.svg`)).fsPath
+	light: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/undo.svg`)),
+	dark: URI.parse(require.toUrl(`vs/workbench/parts/files/electron-browser/media/undo-inverse.svg`))
 }, -9, revertLocalChangesCommand);
 
-function appendSaveConflictEditorTitleAction(id: string, title: string, iconPath: { dark: string; light?: string; }, order: number, command: ICommandHandler): void {
+function appendSaveConflictEditorTitleAction(id: string, title: string, iconLocation: { dark: URI; light?: URI; }, order: number, command: ICommandHandler): void {
 
 	// Command
 	CommandsRegistry.registerCommand(id, command);
 
 	// Action
 	MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
-		command: { id, title, iconPath },
+		command: { id, title, iconLocation },
 		when: ContextKeyExpr.equals(CONFLICT_RESOLUTION_CONTEXT, true),
 		group: 'navigation',
 		order
@@ -460,3 +460,7 @@ MenuRegistry.appendMenuItem(MenuId.ExplorerContext, {
 	},
 	when: ExplorerRootContext.toNegated()
 });
+
+// Empty Editor Group Context Menu
+MenuRegistry.appendMenuItem(MenuId.EmptyEditorGroupContext, { command: { id: 'workbench.action.files.newUntitledFile', title: nls.localize('newFile', "New File") }, group: '1_file', order: 10 });
+MenuRegistry.appendMenuItem(MenuId.EmptyEditorGroupContext, { command: { id: 'workbench.action.quickOpen', title: nls.localize('openFile', "Open File...") }, group: '1_file', order: 20 });

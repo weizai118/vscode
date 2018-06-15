@@ -4,27 +4,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import *  as vscode from 'vscode';
+import { ResourceMap } from './resourceMap';
 
 export class DiagnosticSet {
-	private _map: ObjectMap<vscode.Diagnostic[]> = Object.create(null);
+	private _map = new ResourceMap<vscode.Diagnostic[]>();
 
 	public set(
 		file: vscode.Uri,
 		diagnostics: vscode.Diagnostic[]
 	) {
-		this._map[this.key(file)] = diagnostics;
+		this._map.set(file, diagnostics);
 	}
 
 	public get(file: vscode.Uri): vscode.Diagnostic[] {
-		return this._map[this.key(file)] || [];
+		return this._map.get(file) || [];
 	}
 
 	public clear(): void {
-		this._map = Object.create(null);
-	}
-
-	private key(file: vscode.Uri): string {
-		return file.toString(true);
+		this._map = new ResourceMap<vscode.Diagnostic[]>();
 	}
 }
 
@@ -40,8 +37,11 @@ export class DiagnosticsManager {
 
 	private readonly _diagnostics = new Map<DiagnosticKind, DiagnosticSet>();
 	private readonly _currentDiagnostics: vscode.DiagnosticCollection;
+	private _pendingUpdates = new ResourceMap<any>();
 	private _validate: boolean = true;
 	private _enableSuggestions: boolean = true;
+
+	private readonly updateDelay = 50;
 
 	constructor(
 		owner: string
@@ -55,6 +55,11 @@ export class DiagnosticsManager {
 
 	public dispose() {
 		this._currentDiagnostics.dispose();
+
+		for (const value of this._pendingUpdates.values) {
+			clearTimeout(value);
+		}
+		this._pendingUpdates = new ResourceMap<any>();
 	}
 
 	public reInitialize(): void {
@@ -93,10 +98,21 @@ export class DiagnosticsManager {
 		diagnostics: vscode.Diagnostic[]
 	): void {
 		const collection = this._diagnostics.get(kind);
-		if (collection) {
-			collection.set(file, diagnostics);
-			this.updateCurrentDiagnostics(file);
+		if (!collection) {
+			return;
 		}
+
+		if (diagnostics.length === 0) {
+			const existing = collection.get(file);
+			if (existing.length === 0) {
+				// No need to update
+				return;
+			}
+		}
+
+		collection.set(file, diagnostics);
+
+		this.scheduleDiagnosticsUpdate(file);
 	}
 
 	public configFileDiagnosticsReceived(file: vscode.Uri, diagnostics: vscode.Diagnostic[]): void {
@@ -107,7 +123,22 @@ export class DiagnosticsManager {
 		this._currentDiagnostics.delete(resource);
 	}
 
+	public getDiagnostics(file: vscode.Uri): vscode.Diagnostic[] {
+		return this._currentDiagnostics.get(file) || [];
+	}
+
+	private scheduleDiagnosticsUpdate(file: vscode.Uri) {
+		if (!this._pendingUpdates.has(file)) {
+			this._pendingUpdates.set(file, setTimeout(() => this.updateCurrentDiagnostics(file), this.updateDelay));
+		}
+	}
+
 	private updateCurrentDiagnostics(file: vscode.Uri) {
+		if (this._pendingUpdates.has(file)) {
+			clearTimeout(this._pendingUpdates.get(file));
+			this._pendingUpdates.delete(file);
+		}
+
 		if (!this._validate) {
 			return;
 		}
@@ -121,14 +152,12 @@ export class DiagnosticsManager {
 	}
 
 	private getSuggestionDiagnostics(file: vscode.Uri) {
-		if (!this._enableSuggestions) {
-			return [];
-		}
-
-		return this._diagnostics.get(DiagnosticKind.Suggestion)!.get(file);
-	}
-
-	public getDiagnostics(file: vscode.Uri): vscode.Diagnostic[] {
-		return this._currentDiagnostics.get(file) || [];
+		return this._diagnostics.get(DiagnosticKind.Suggestion)!.get(file).filter(x => {
+			if (!this._enableSuggestions) {
+				// Still show unused
+				return x.customTags && x.customTags.indexOf(vscode.DiagnosticTag.Unnecessary) !== -1;
+			}
+			return true;
+		});
 	}
 }
