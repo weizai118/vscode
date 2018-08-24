@@ -14,7 +14,7 @@ import { wireCancellationToken } from 'vs/base/common/async';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { Position as EditorPosition } from 'vs/editor/common/core/position';
 import { Range as EditorRange } from 'vs/editor/common/core/range';
-import { ExtHostContext, MainThreadLanguageFeaturesShape, ExtHostLanguageFeaturesShape, MainContext, IExtHostContext, ISerializedLanguageConfiguration, ISerializedRegExp, ISerializedIndentationRule, ISerializedOnEnterRule, LocationDto, WorkspaceSymbolDto, CodeActionDto, reviveWorkspaceEditDto, ISerializedDocumentFilter } from '../node/extHost.protocol';
+import { ExtHostContext, MainThreadLanguageFeaturesShape, ExtHostLanguageFeaturesShape, MainContext, IExtHostContext, ISerializedLanguageConfiguration, ISerializedRegExp, ISerializedIndentationRule, ISerializedOnEnterRule, LocationDto, WorkspaceSymbolDto, CodeActionDto, reviveWorkspaceEditDto, ISerializedDocumentFilter, DefinitionLinkDto } from '../node/extHost.protocol';
 import { LanguageConfigurationRegistry } from 'vs/editor/common/modes/languageConfigurationRegistry';
 import { LanguageConfiguration, IndentationRule, OnEnterRule } from 'vs/editor/common/modes/languageConfiguration';
 import { IHeapService } from './mainThreadHeapService';
@@ -72,6 +72,20 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 		}
 	}
 
+	private static _reviveDefinitionLinkDto(data: DefinitionLinkDto): modes.DefinitionLink;
+	private static _reviveDefinitionLinkDto(data: DefinitionLinkDto[]): modes.DefinitionLink[];
+	private static _reviveDefinitionLinkDto(data: DefinitionLinkDto | DefinitionLinkDto[]): modes.DefinitionLink | modes.DefinitionLink[] {
+		if (!data) {
+			return <modes.DefinitionLink>data;
+		} else if (Array.isArray(data)) {
+			data.forEach(l => MainThreadLanguageFeatures._reviveDefinitionLinkDto(l));
+			return <modes.DefinitionLink[]>data;
+		} else {
+			data.uri = URI.revive(data.uri);
+			return <modes.DefinitionLink>data;
+		}
+	}
+
 	private static _reviveWorkspaceSymbolDto(data: WorkspaceSymbolDto): search.IWorkspaceSymbol;
 	private static _reviveWorkspaceSymbolDto(data: WorkspaceSymbolDto[]): search.IWorkspaceSymbol[];
 	private static _reviveWorkspaceSymbolDto(data: WorkspaceSymbolDto | WorkspaceSymbolDto[]): search.IWorkspaceSymbol | search.IWorkspaceSymbol[] {
@@ -97,9 +111,9 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 
 	// --- outline
 
-	$registerOutlineSupport(handle: number, selector: ISerializedDocumentFilter[], extensionId: string): void {
+	$registerOutlineSupport(handle: number, selector: ISerializedDocumentFilter[], displayName: string): void {
 		this._registrations[handle] = modes.DocumentSymbolProviderRegistry.register(typeConverters.LanguageSelector.from(selector), <modes.DocumentSymbolProvider>{
-			extensionId,
+			displayName,
 			provideDocumentSymbols: (model: ITextModel, token: CancellationToken): Thenable<modes.DocumentSymbol[]> => {
 				return wireCancellationToken(token, this._proxy.$provideDocumentSymbols(handle, model.uri));
 			}
@@ -139,8 +153,8 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 
 	$registerDeclaractionSupport(handle: number, selector: ISerializedDocumentFilter[]): void {
 		this._registrations[handle] = modes.DefinitionProviderRegistry.register(typeConverters.LanguageSelector.from(selector), <modes.DefinitionProvider>{
-			provideDefinition: (model, position, token): Thenable<modes.Definition> => {
-				return wireCancellationToken(token, this._proxy.$provideDefinition(handle, model.uri, position)).then(MainThreadLanguageFeatures._reviveLocationDto);
+			provideDefinition: (model, position, token): Thenable<modes.DefinitionLink[]> => {
+				return wireCancellationToken(token, this._proxy.$provideDefinition(handle, model.uri, position)).then(MainThreadLanguageFeatures._reviveDefinitionLinkDto);
 			}
 		});
 	}
@@ -148,7 +162,7 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 	$registerImplementationSupport(handle: number, selector: ISerializedDocumentFilter[]): void {
 		this._registrations[handle] = modes.ImplementationProviderRegistry.register(typeConverters.LanguageSelector.from(selector), <modes.ImplementationProvider>{
 			provideImplementation: (model, position, token): Thenable<modes.Definition> => {
-				return wireCancellationToken(token, this._proxy.$provideImplementation(handle, model.uri, position)).then(MainThreadLanguageFeatures._reviveLocationDto);
+				return wireCancellationToken(token, this._proxy.$provideImplementation(handle, model.uri, position)).then(MainThreadLanguageFeatures._reviveDefinitionLinkDto);
 			}
 		});
 	}
@@ -156,7 +170,7 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 	$registerTypeDefinitionSupport(handle: number, selector: ISerializedDocumentFilter[]): void {
 		this._registrations[handle] = modes.TypeDefinitionProviderRegistry.register(typeConverters.LanguageSelector.from(selector), <modes.TypeDefinitionProvider>{
 			provideTypeDefinition: (model, position, token): Thenable<modes.Definition> => {
-				return wireCancellationToken(token, this._proxy.$provideTypeDefinition(handle, model.uri, position)).then(MainThreadLanguageFeatures._reviveLocationDto);
+				return wireCancellationToken(token, this._proxy.$provideTypeDefinition(handle, model.uri, position)).then(MainThreadLanguageFeatures._reviveDefinitionLinkDto);
 			}
 		});
 	}

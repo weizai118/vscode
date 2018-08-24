@@ -13,12 +13,12 @@ import { InputBox } from 'vs/base/browser/ui/inputbox/inputBox';
 import { ProgressBar } from 'vs/base/browser/ui/progressbar/progressbar';
 import { Action, IAction, RadioGroup } from 'vs/base/common/actions';
 import { firstIndex } from 'vs/base/common/arrays';
-import { asDisposablePromise, setDisposableTimeout } from 'vs/base/common/async';
-import { onUnexpectedError } from 'vs/base/common/errors';
+import { asDisposablePromise, setDisposableTimeout, createCancelablePromise, timeout } from 'vs/base/common/async';
+import { onUnexpectedError, isPromiseCanceledError } from 'vs/base/common/errors';
 import { Emitter } from 'vs/base/common/event';
 import { defaultGenerator } from 'vs/base/common/idGenerator';
 import { KeyCode } from 'vs/base/common/keyCodes';
-import { dispose, IDisposable } from 'vs/base/common/lifecycle';
+import { dispose, IDisposable, toDisposable } from 'vs/base/common/lifecycle';
 import { LRUCache } from 'vs/base/common/map';
 import { escape } from 'vs/base/common/strings';
 import URI from 'vs/base/common/uri';
@@ -27,19 +27,19 @@ import { ITree } from 'vs/base/parts/tree/browser/tree';
 import 'vs/css!./outlinePanel';
 import { ICodeEditor, isCodeEditor, isDiffEditor } from 'vs/editor/browser/editorBrowser';
 import { ServicesAccessor } from 'vs/editor/browser/editorExtensions';
-import { CursorChangeReason } from 'vs/editor/common/controller/cursorEvents';
 import { Range } from 'vs/editor/common/core/range';
 import { Selection } from 'vs/editor/common/core/selection';
 import { IModelContentChangedEvent } from 'vs/editor/common/model/textModelEvents';
 import { DocumentSymbolProviderRegistry } from 'vs/editor/common/modes';
 import LanguageFeatureRegistry from 'vs/editor/common/modes/languageFeatureRegistry';
+import { OutlineElement, OutlineModel, TreeElement } from 'vs/editor/contrib/documentSymbols/outlineModel';
 import { localize } from 'vs/nls';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ContextKeyExpr, IContextKey, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
-import { KeybindingsRegistry } from 'vs/platform/keybinding/common/keybindingsRegistry';
+import { KeybindingsRegistry, KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { WorkbenchTree } from 'vs/platform/list/browser/listService';
 import { IMarkerService, MarkerSeverity } from 'vs/platform/markers/common/markers';
 import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
@@ -48,12 +48,12 @@ import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { ViewletPanel } from 'vs/workbench/browser/parts/views/panelViewlet';
 import { IViewletViewOptions } from 'vs/workbench/browser/parts/views/viewsViewlet';
 import { CollapseAction } from 'vs/workbench/browser/viewlet';
-import { ACTIVE_GROUP, IEditorService, SIDE_GROUP } from 'vs/workbench/services/editor/common/editorService';
-import { KeyboardMapperFactory } from 'vs/workbench/services/keybinding/electron-browser/keybindingService';
-import { OutlineConfigKeys, OutlineViewFiltered, OutlineViewFocused, OutlineViewId } from './outline';
-import { OutlineElement, OutlineModel, TreeElement } from './outlineModel';
-import { OutlineController, OutlineDataSource, OutlineItemComparator, OutlineItemCompareType, OutlineItemFilter, OutlineRenderer, OutlineTreeState } from './outlineTree';
 import { IViewsService } from 'vs/workbench/common/views';
+import { ACTIVE_GROUP, IEditorService, SIDE_GROUP } from 'vs/workbench/services/editor/common/editorService';
+import { OutlineConfigKeys, OutlineViewFiltered, OutlineViewFocused, OutlineViewId } from './outline';
+import { OutlineController, OutlineDataSource, OutlineItemComparator, OutlineItemCompareType, OutlineItemFilter, OutlineRenderer, OutlineTreeState } from '../../../../editor/contrib/documentSymbols/outlineTree';
+import { IResourceInput } from 'vs/platform/editor/common/editor';
+import { ITextModel } from 'vs/editor/common/model';
 
 class RequestState {
 
@@ -135,11 +135,15 @@ class RequestOracle {
 		let modeListener = codeEditor.onDidChangeModelLanguage(_ => {
 			this._callback(codeEditor, undefined);
 		});
+		let disposeListener = codeEditor.onDidDispose(() => {
+			this._callback(undefined, undefined);
+		});
 		this._sessionDisposable = {
 			dispose() {
 				contentListener.dispose();
 				clearTimeout(handle);
 				modeListener.dispose();
+				disposeListener.dispose();
 			}
 		};
 	}
@@ -235,6 +239,7 @@ export class OutlinePanel extends ViewletPanel {
 	private _progressBar: ProgressBar;
 	private _tree: WorkbenchTree;
 	private _treeDataSource: OutlineDataSource;
+	private _treeRenderer: OutlineRenderer;
 	private _treeFilter: OutlineItemFilter;
 	private _treeComparator: OutlineItemComparator;
 	private _treeStates = new LRUCache<string, OutlineTreeState>(10);
@@ -250,12 +255,12 @@ export class OutlinePanel extends ViewletPanel {
 		@IEditorService private readonly _editorService: IEditorService,
 		@IMarkerService private readonly _markerService: IMarkerService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IKeybindingService private readonly _keybindingService: IKeybindingService,
 		@IConfigurationService configurationService: IConfigurationService,
-		@IKeybindingService keybindingService: IKeybindingService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IContextMenuService contextMenuService: IContextMenuService,
 	) {
-		super(options, keybindingService, contextMenuService, configurationService);
+		super(options, _keybindingService, contextMenuService, configurationService);
 		this._outlineViewState.restore(this._storageService);
 		this._contextKeyFocused = OutlineViewFocused.bindTo(contextKeyService);
 		this._contextKeyFiltered = OutlineViewFiltered.bindTo(contextKeyService);
@@ -266,6 +271,7 @@ export class OutlinePanel extends ViewletPanel {
 	dispose(): void {
 		dispose(this._disposables);
 		dispose(this._requestOracle);
+		dispose(this._editorDisposables);
 		super.dispose();
 	}
 
@@ -319,8 +325,6 @@ export class OutlinePanel extends ViewletPanel {
 		const $this = this;
 		const controller = new class extends OutlineController {
 
-			private readonly _mapper = KeyboardMapperFactory.INSTANCE;
-
 			constructor() {
 				super({}, $this.configurationService);
 			}
@@ -336,23 +340,22 @@ export class OutlinePanel extends ViewletPanel {
 				// crazy -> during keydown focus moves to the input box
 				// and because of that the keyup event is handled by the
 				// input field
-				const mapping = this._mapper.getRawKeyboardMapping();
-				if (!mapping) {
-					return false;
-				}
-				const keyInfo = mapping[event.code];
-				if (keyInfo.value) {
+				if ($this._keybindingService.mightProducePrintableCharacter(event)) {
 					$this._input.focus();
 					return true;
 				}
 				return false;
 			}
 		};
-		const renderer = this._instantiationService.createInstance(OutlineRenderer);
+
+		this._treeRenderer = this._instantiationService.createInstance(OutlineRenderer);
 		this._treeDataSource = new OutlineDataSource();
 		this._treeComparator = new OutlineItemComparator(this._outlineViewState.sortBy);
 		this._treeFilter = new OutlineItemFilter();
-		this._tree = this._instantiationService.createInstance(WorkbenchTree, treeContainer, { controller, renderer, dataSource: this._treeDataSource, sorter: this._treeComparator, filter: this._treeFilter }, {});
+		this._tree = this._instantiationService.createInstance(WorkbenchTree, treeContainer, { controller, renderer: this._treeRenderer, dataSource: this._treeDataSource, sorter: this._treeComparator, filter: this._treeFilter }, {});
+
+		this._treeRenderer.renderProblemColors = this._configurationService.getValue(OutlineConfigKeys.problemsColors);
+		this._treeRenderer.renderProblemBadges = this._configurationService.getValue(OutlineConfigKeys.problemsBadges);
 
 		this._disposables.push(this._tree, this._input);
 		this._disposables.push(this._outlineViewState.onDidChange(this._onDidChangeUserState, this));
@@ -430,13 +433,26 @@ export class OutlinePanel extends ViewletPanel {
 		this._message.innerText = escape(message);
 	}
 
-	private async _doUpdate(editor: ICodeEditor, event: IModelContentChangedEvent): TPromise<void> {
+	private static _createOutlineModel(model: ITextModel, disposables: IDisposable[]): Promise<OutlineModel> {
+		let promise = createCancelablePromise(token => OutlineModel.create(model, token));
+		disposables.push({ dispose() { promise.cancel(); } });
+		return promise.catch(err => {
+			if (!isPromiseCanceledError(err)) {
+				throw err;
+			}
+			return undefined;
+		});
+	}
+
+	private async _doUpdate(editor: ICodeEditor, event: IModelContentChangedEvent): Promise<void> {
 		dispose(this._editorDisposables);
 
 		this._editorDisposables = new Array();
-		this._input.disable();
-		this._input.value = '';
 		this._progressBar.infinite().show(150);
+		this._input.disable();
+		if (!event) {
+			this._input.value = '';
+		}
 
 		if (!editor || !DocumentSymbolProviderRegistry.has(editor.getModel())) {
 			return this._showMessage(localize('no-editor', "There are no editors open that can provide outline information."));
@@ -452,10 +468,14 @@ export class OutlinePanel extends ViewletPanel {
 			);
 		}
 
-		let model = await asDisposablePromise(OutlineModel.create(textModel), undefined, this._editorDisposables).promise;
+		let model = await OutlinePanel._createOutlineModel(textModel, this._editorDisposables);
 		dispose(loadingMessage);
 		if (!model) {
 			return;
+		}
+
+		if (TreeElement.empty(model)) {
+			return this._showMessage(localize('no-symbols', "No symbols found in document '{0}'", posix.basename(textModel.uri.path)));
 		}
 
 		let newSize = TreeElement.size(model);
@@ -476,7 +496,7 @@ export class OutlinePanel extends ViewletPanel {
 			let oldRatio = oldSize / oldLength;
 			if (newRatio <= oldRatio * 0.5 || newRatio >= oldRatio * 1.5) {
 				if (!await asDisposablePromise(
-					TPromise.timeout(2000).then(_ => true),
+					timeout(2000).then(_ => true),
 					false,
 					this._editorDisposables).promise
 				) {
@@ -487,7 +507,7 @@ export class OutlinePanel extends ViewletPanel {
 
 		this._progressBar.stop().hide();
 
-		if (oldModel && oldModel.adopt(model)) {
+		if (oldModel && oldModel.merge(model)) {
 			this._tree.refresh(undefined, true);
 			model = oldModel;
 
@@ -499,7 +519,7 @@ export class OutlinePanel extends ViewletPanel {
 			}
 			await this._tree.setInput(model);
 			let state = this._treeStates.get(model.textModel.uri.toString());
-			OutlineTreeState.restore(this._tree, state);
+			await OutlineTreeState.restore(this._tree, state, this);
 		}
 
 		this._input.enable();
@@ -510,11 +530,11 @@ export class OutlinePanel extends ViewletPanel {
 		// on first type -> capture tree state
 		// on erase -> restore captured tree state
 		let beforePatternState: OutlineTreeState;
-		this._editorDisposables.push(this._input.onDidChange(async pattern => {
+		let onInputValueChanged = async pattern => {
 
 			this._contextKeyFiltered.set(pattern.length > 0);
 
-			if (!beforePatternState) {
+			if (pattern && !beforePatternState) {
 				beforePatternState = OutlineTreeState.capture(this._tree);
 			}
 			let item = model.updateMatches(pattern);
@@ -527,19 +547,21 @@ export class OutlinePanel extends ViewletPanel {
 			}
 
 			if (!pattern && beforePatternState) {
-				await OutlineTreeState.restore(this._tree, beforePatternState);
+				await OutlineTreeState.restore(this._tree, beforePatternState, this);
 				beforePatternState = undefined;
 			}
-		}));
+		};
+		if (this._input.value) {
+			onInputValueChanged(this._input.value);
+		}
+		this._editorDisposables.push(this._input.onDidChange(onInputValueChanged));
 
-		this._editorDisposables.push({
-			dispose: () => this._contextKeyFiltered.reset()
-		});
+		this._editorDisposables.push(toDisposable(() => this._contextKeyFiltered.reset()));
 
 		// feature: reveal outline selection in editor
 		// on change -> reveal/select defining range
 		this._editorDisposables.push(this._tree.onDidChangeSelection(e => {
-			if (e.payload === this) {
+			if (e.payload === this || e.payload && e.payload.didClickOnTwistie) {
 				return;
 			}
 			let [first] = e.selection;
@@ -563,8 +585,16 @@ export class OutlinePanel extends ViewletPanel {
 		}));
 
 		// feature: reveal editor selection in outline
-		this._editorDisposables.push(editor.onDidChangeCursorSelection(e => e.reason === CursorChangeReason.Explicit && this._revealEditorSelection(model, e.selection)));
 		this._revealEditorSelection(model, editor.getSelection());
+		const versionIdThen = model.textModel.getVersionId();
+		this._editorDisposables.push(editor.onDidChangeCursorSelection(e => {
+			// first check if the document has changed and stop revealing the
+			// cursor position iff it has -> we will update/recompute the
+			// outline view then anyways
+			if (!model.textModel.isDisposed() && model.textModel.getVersionId() === versionIdThen) {
+				this._revealEditorSelection(model, e.selection);
+			}
+		}));
 
 		// feature: show markers in outline
 		const updateMarker = (e: URI[], ignoreEmpty?: boolean) => {
@@ -585,6 +615,8 @@ export class OutlinePanel extends ViewletPanel {
 
 		this._editorDisposables.push(this.configurationService.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration(OutlineConfigKeys.problemsBadges) || e.affectsConfiguration(OutlineConfigKeys.problemsColors)) {
+				this._treeRenderer.renderProblemColors = this._configurationService.getValue(OutlineConfigKeys.problemsColors);
+				this._treeRenderer.renderProblemBadges = this._configurationService.getValue(OutlineConfigKeys.problemsBadges);
 				this._tree.refresh(undefined, true);
 				return;
 			}
@@ -616,26 +648,31 @@ export class OutlinePanel extends ViewletPanel {
 		}
 	}
 
-	private async _revealTreeSelection(model: OutlineModel, element: OutlineElement, focus: boolean, aside: boolean): TPromise<void> {
+	private async _revealTreeSelection(model: OutlineModel, element: OutlineElement, focus: boolean, aside: boolean): Promise<void> {
 
-		let input = this._editorService.createInput({ resource: model.textModel.uri });
-		await this._editorService.openEditor(input, { preserveFocus: !focus, selection: Range.collapseToStart(element.symbol.identifierRange), revealInCenterIfOutsideViewport: true, forceOpen: true }, aside ? SIDE_GROUP : ACTIVE_GROUP);
+		await this._editorService.openEditor({
+			resource: model.textModel.uri,
+			options: {
+				preserveFocus: !focus,
+				selection: Range.collapseToStart(element.symbol.selectionRange),
+				revealInCenterIfOutsideViewport: true
+			}
+		} as IResourceInput, aside ? SIDE_GROUP : ACTIVE_GROUP);
 	}
 
-	private async _revealEditorSelection(model: OutlineModel, selection: Selection): TPromise<void> {
-		if (!this._outlineViewState.followCursor && !this._tree.getInput()) {
+	private async _revealEditorSelection(model: OutlineModel, selection: Selection): Promise<void> {
+		if (!this._outlineViewState.followCursor || !this._tree.getInput() || !selection) {
 			return;
 		}
+		let [first] = this._tree.getSelection();
 		let item = model.getItemEnclosingPosition({
 			lineNumber: selection.selectionStartLineNumber,
 			column: selection.selectionStartColumn
-		});
+		}, first instanceof OutlineElement ? first : undefined);
 		if (item) {
 			await this._tree.reveal(item, .5);
 			this._tree.setFocus(item, this);
 			this._tree.setSelection([item], this);
-		} else {
-			this._tree.setSelection([], this);
 		}
 	}
 
@@ -669,7 +706,7 @@ async function goUpOrDownToHighligthedElement(accessor: ServicesAccessor, prev: 
 
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: 'outline.focusDownHighlighted',
-	weight: KeybindingsRegistry.WEIGHT.workbenchContrib(),
+	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyCode.DownArrow,
 	when: ContextKeyExpr.and(OutlineViewFiltered, OutlineViewFocused),
 	handler: accessor => goUpOrDownToHighligthedElement(accessor, false)
@@ -677,7 +714,7 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: 'outline.focusUpHighlighted',
-	weight: KeybindingsRegistry.WEIGHT.workbenchContrib(),
+	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyCode.UpArrow,
 	when: ContextKeyExpr.and(OutlineViewFiltered, OutlineViewFocused),
 	handler: accessor => goUpOrDownToHighligthedElement(accessor, true)

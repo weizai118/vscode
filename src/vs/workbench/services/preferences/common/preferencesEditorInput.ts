@@ -13,18 +13,12 @@ import { EditorInput, SideBySideEditorInput, Verbosity } from 'vs/workbench/comm
 import { ResourceEditorInput } from 'vs/workbench/common/editor/resourceEditorInput';
 import { IHashService } from 'vs/workbench/services/hash/common/hashService';
 import { KeybindingsEditorModel } from 'vs/workbench/services/preferences/common/keybindingsEditorModel';
-import { IPreferencesService } from './preferences';
-import { DefaultSettingsEditorModel } from './preferencesModels';
 
 export class PreferencesEditorInput extends SideBySideEditorInput {
 	public static readonly ID: string = 'workbench.editorinputs.preferencesEditorInput';
 
 	getTypeId(): string {
 		return PreferencesEditorInput.ID;
-	}
-
-	public supportsSplitEditor(): boolean {
-		return true;
 	}
 
 	public getTitle(verbosity: Verbosity): string {
@@ -74,7 +68,7 @@ export class KeybindingsEditorInput extends EditorInput {
 		return nls.localize('keybindingsInputName', "Keyboard Shortcuts");
 	}
 
-	resolve(refresh?: boolean): TPromise<KeybindingsEditorModel> {
+	resolve(): TPromise<KeybindingsEditorModel> {
 		return TPromise.as(this.keybindingsModel);
 	}
 
@@ -83,29 +77,18 @@ export class KeybindingsEditorInput extends EditorInput {
 	}
 }
 
-export class SettingsEditor2Input extends EditorInput {
+export class SettingsEditor2Input extends ResourceEditorInput {
 
 	public static readonly ID: string = 'workbench.input.settings2';
 
-	constructor(
-		@IPreferencesService private preferencesService: IPreferencesService
+	constructor(defaultSettingsResource: URI,
+		@ITextModelService textModelResolverService: ITextModelService,
+		@IHashService hashService: IHashService
 	) {
-		super();
+		super(nls.localize('settingsEditor2InputName', "Settings (Preview)"), '', defaultSettingsResource, textModelResolverService, hashService);
 	}
 
 	getTypeId(): string {
 		return SettingsEditor2Input.ID;
-	}
-
-	getName(): string {
-		return nls.localize('settingsEditor2InputName', "Settings (Preview)");
-	}
-
-	resolve(refresh?: boolean): TPromise<DefaultSettingsEditorModel> {
-		return <TPromise<DefaultSettingsEditorModel>>this.preferencesService.createPreferencesEditorModel(URI.parse('vscode://defaultsettings/0/settings.json'));
-	}
-
-	matches(otherInput: any): boolean {
-		return otherInput instanceof SettingsEditor2Input;
 	}
 }

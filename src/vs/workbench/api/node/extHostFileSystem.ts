@@ -9,12 +9,13 @@ import { TPromise } from 'vs/base/common/winjs.base';
 import { MainContext, IMainContext, ExtHostFileSystemShape, MainThreadFileSystemShape, IFileChangeDto } from './extHost.protocol';
 import * as vscode from 'vscode';
 import * as files from 'vs/platform/files/common/files';
-import { IDisposable } from 'vs/base/common/lifecycle';
+import { IDisposable, toDisposable } from 'vs/base/common/lifecycle';
 import { asWinJsPromise } from 'vs/base/common/async';
 import { values } from 'vs/base/common/map';
 import { Range, FileChangeType } from 'vs/workbench/api/node/extHostTypes';
 import { ExtHostLanguageFeatures } from 'vs/workbench/api/node/extHostLanguageFeatures';
 import { Schemas } from 'vs/base/common/network';
+import { LabelRules } from 'vs/platform/label/common/label';
 
 class FsLinkProvider implements vscode.DocumentLinkProvider {
 
@@ -83,7 +84,7 @@ export class ExtHostFileSystem implements ExtHostFileSystemShape {
 		extHostLanguageFeatures.registerDocumentLinkProvider('*', this._linkProvider);
 	}
 
-	registerFileSystemProvider(scheme: string, provider: vscode.FileSystemProvider, options: { isCaseSensitive?: boolean } = {}) {
+	registerFileSystemProvider(scheme: string, provider: vscode.FileSystemProvider, options: { isCaseSensitive?: boolean, isReadonly?: boolean } = {}) {
 
 		if (this._usedSchemes.has(scheme)) {
 			throw new Error(`a provider for the scheme '${scheme}' is already registered`);
@@ -97,6 +98,9 @@ export class ExtHostFileSystem implements ExtHostFileSystemShape {
 		let capabilites = files.FileSystemProviderCapabilities.FileReadWrite;
 		if (options.isCaseSensitive) {
 			capabilites += files.FileSystemProviderCapabilities.PathCaseSensitive;
+		}
+		if (options.isReadonly) {
+			capabilites += files.FileSystemProviderCapabilities.Readonly;
 		}
 		if (typeof provider.copy === 'function') {
 			capabilites += files.FileSystemProviderCapabilities.FileFolderCopy;
@@ -129,15 +133,17 @@ export class ExtHostFileSystem implements ExtHostFileSystemShape {
 			this._proxy.$onFileSystemChange(handle, mapped);
 		});
 
-		return {
-			dispose: () => {
-				subscription.dispose();
-				this._linkProvider.delete(scheme);
-				this._usedSchemes.delete(scheme);
-				this._fsProvider.delete(handle);
-				this._proxy.$unregisterProvider(handle);
-			}
-		};
+		return toDisposable(() => {
+			subscription.dispose();
+			this._linkProvider.delete(scheme);
+			this._usedSchemes.delete(scheme);
+			this._fsProvider.delete(handle);
+			this._proxy.$unregisterProvider(handle);
+		});
+	}
+
+	setUriFormatter(scheme: string, formatter: LabelRules): void {
+		this._proxy.$setUriFormatter(scheme, formatter);
 	}
 
 	private static _asIStat(stat: vscode.FileStat): files.IStat {
@@ -145,11 +151,11 @@ export class ExtHostFileSystem implements ExtHostFileSystemShape {
 		return { type, ctime, mtime, size };
 	}
 
-	$stat(handle: number, resource: UriComponents): TPromise<files.IStat, any> {
+	$stat(handle: number, resource: UriComponents): TPromise<files.IStat> {
 		return asWinJsPromise(() => this._fsProvider.get(handle).stat(URI.revive(resource))).then(ExtHostFileSystem._asIStat);
 	}
 
-	$readdir(handle: number, resource: UriComponents): TPromise<[string, files.FileType][], any> {
+	$readdir(handle: number, resource: UriComponents): TPromise<[string, files.FileType][]> {
 		return asWinJsPromise(() => this._fsProvider.get(handle).readDirectory(URI.revive(resource)));
 	}
 
@@ -161,23 +167,23 @@ export class ExtHostFileSystem implements ExtHostFileSystemShape {
 		});
 	}
 
-	$writeFile(handle: number, resource: UriComponents, base64Content: string, opts: files.FileWriteOptions): TPromise<void, any> {
+	$writeFile(handle: number, resource: UriComponents, base64Content: string, opts: files.FileWriteOptions): TPromise<void> {
 		return asWinJsPromise(() => this._fsProvider.get(handle).writeFile(URI.revive(resource), Buffer.from(base64Content, 'base64'), opts));
 	}
 
-	$delete(handle: number, resource: UriComponents): TPromise<void, any> {
-		return asWinJsPromise(() => this._fsProvider.get(handle).delete(URI.revive(resource), { recursive: true }));
+	$delete(handle: number, resource: UriComponents, opts: files.FileDeleteOptions): TPromise<void> {
+		return asWinJsPromise(() => this._fsProvider.get(handle).delete(URI.revive(resource), opts));
 	}
 
-	$rename(handle: number, oldUri: UriComponents, newUri: UriComponents, opts: files.FileOverwriteOptions): TPromise<void, any> {
+	$rename(handle: number, oldUri: UriComponents, newUri: UriComponents, opts: files.FileOverwriteOptions): TPromise<void> {
 		return asWinJsPromise(() => this._fsProvider.get(handle).rename(URI.revive(oldUri), URI.revive(newUri), opts));
 	}
 
-	$copy(handle: number, oldUri: UriComponents, newUri: UriComponents, opts: files.FileOverwriteOptions): TPromise<void, any> {
+	$copy(handle: number, oldUri: UriComponents, newUri: UriComponents, opts: files.FileOverwriteOptions): TPromise<void> {
 		return asWinJsPromise(() => this._fsProvider.get(handle).copy(URI.revive(oldUri), URI.revive(newUri), opts));
 	}
 
-	$mkdir(handle: number, resource: UriComponents): TPromise<void, any> {
+	$mkdir(handle: number, resource: UriComponents): TPromise<void> {
 		return asWinJsPromise(() => this._fsProvider.get(handle).createDirectory(URI.revive(resource)));
 	}
 

@@ -6,14 +6,12 @@
 'use strict';
 
 import * as path from 'path';
-
 import { onUnexpectedError } from 'vs/base/common/errors';
 import { IProgress } from 'vs/platform/search/common/search';
 import { FileWalker } from 'vs/workbench/services/search/node/fileSearch';
-
-import { ISerializedFileMatch, ISerializedSearchComplete, IRawSearch, ISearchEngine } from './search';
-import { ISearchWorker } from './worker/searchWorkerIpc';
+import { IRawSearch, ISearchEngine, ISearchEngineSuccess, ISerializedFileMatch } from './search';
 import { ITextSearchWorkerProvider } from './textSearchWorkerProvider';
+import { ISearchWorker } from './worker/searchWorkerIpc';
 
 export class Engine implements ISearchEngine<ISerializedFileMatch[]> {
 
@@ -60,7 +58,7 @@ export class Engine implements ISearchEngine<ISerializedFileMatch[]> {
 		});
 	}
 
-	search(onResult: (match: ISerializedFileMatch[]) => void, onProgress: (progress: IProgress) => void, done: (error: Error, complete: ISerializedSearchComplete) => void): void {
+	search(onResult: (match: ISerializedFileMatch[]) => void, onProgress: (progress: IProgress) => void, done: (error: Error, complete: ISearchEngineSuccess) => void): void {
 		this.workers = this.workerProvider.getWorkers();
 		this.initializeWorkers();
 

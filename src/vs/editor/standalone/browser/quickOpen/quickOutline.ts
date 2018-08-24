@@ -22,6 +22,7 @@ import { registerEditorAction, ServicesAccessor } from 'vs/editor/browser/editor
 import { KeyCode, KeyMod } from 'vs/base/common/keyCodes';
 import { Range, IRange } from 'vs/editor/common/core/range';
 import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
 
 let SCOPE_PREFIX = ':';
 
@@ -120,7 +121,8 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 			precondition: EditorContextKeys.hasDocumentSymbolProvider,
 			kbOpts: {
 				kbExpr: EditorContextKeys.focus,
-				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_O
+				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_O,
+				weight: KeybindingWeight.EditorContrib
 			},
 			menuOpts: {
 				group: 'navigation',
@@ -197,7 +199,7 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 				}
 
 				// Add
-				results.push(this.symbolEntry(label, symbolKindToCssClass(element.kind), description, element.fullRange, highlights, editor, controller));
+				results.push(this.symbolEntry(label, symbolKindToCssClass(element.kind), description, element.range, highlights, editor, controller));
 			}
 		}
 

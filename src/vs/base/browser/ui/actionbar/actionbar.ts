@@ -11,7 +11,7 @@ import * as nls from 'vs/nls';
 import * as lifecycle from 'vs/base/common/lifecycle';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { Builder, $ } from 'vs/base/browser/builder';
-import { SelectBox } from 'vs/base/browser/ui/selectBox/selectBox';
+import { SelectBox, ISelectBoxOptions } from 'vs/base/browser/ui/selectBox/selectBox';
 import { IAction, IActionRunner, Action, IActionChangeEvent, ActionRunner, IRunEvent } from 'vs/base/common/actions';
 import * as DOM from 'vs/base/browser/dom';
 import * as types from 'vs/base/common/types';
@@ -158,7 +158,10 @@ export class BaseActionItem implements IActionItem {
 			context = event;
 		} else {
 			context = this._context;
-			context.event = event;
+
+			if (types.isObject(context)) {
+				context.event = event;
+			}
 		}
 
 		this._actionRunner.run(this._action, context);
@@ -167,12 +170,14 @@ export class BaseActionItem implements IActionItem {
 	public focus(): void {
 		if (this.builder) {
 			this.builder.domFocus();
+			this.builder.addClass('focused');
 		}
 	}
 
 	public blur(): void {
 		if (this.builder) {
 			this.builder.domBlur();
+			this.builder.removeClass('focused');
 		}
 	}
 
@@ -351,7 +356,6 @@ export interface IActionBarOptions {
 	actionRunner?: IActionRunner;
 	ariaLabel?: string;
 	animated?: boolean;
-	isMenu?: boolean;
 }
 
 let defaultOptions: IActionBarOptions = {
@@ -372,13 +376,12 @@ export class ActionBar implements IActionRunner {
 
 	// Items
 	public items: IActionItem[];
-
-	private focusedItem: number;
+	protected focusedItem: number;
 	private focusTracker: DOM.IFocusTracker;
 
 	// Elements
 	public domNode: HTMLElement;
-	private actionsList: HTMLElement;
+	protected actionsList: HTMLElement;
 
 	private toDispose: lifecycle.IDisposable[];
 
@@ -486,11 +489,8 @@ export class ActionBar implements IActionRunner {
 
 		this.actionsList = document.createElement('ul');
 		this.actionsList.className = 'actions-container';
-		if (this.options.isMenu) {
-			this.actionsList.setAttribute('role', 'menubar');
-		} else {
-			this.actionsList.setAttribute('role', 'toolbar');
-		}
+		this.actionsList.setAttribute('role', 'toolbar');
+
 		if (this.options.ariaLabel) {
 			this.actionsList.setAttribute('aria-label', this.options.ariaLabel);
 		}
@@ -639,10 +639,12 @@ export class ActionBar implements IActionRunner {
 
 	public focus(selectFirst?: boolean): void {
 		if (selectFirst && typeof this.focusedItem === 'undefined') {
-			this.focusedItem = 0;
+			// Focus the first enabled item
+			this.focusedItem = this.items.length - 1;
+			this.focusNext();
+		} else {
+			this.updateFocus();
 		}
-
-		this.updateFocus();
 	}
 
 	private focusNext(): void {
@@ -690,10 +692,9 @@ export class ActionBar implements IActionRunner {
 		this.updateFocus(true);
 	}
 
-	private updateFocus(fromRight?: boolean): void {
+	protected updateFocus(fromRight?: boolean): void {
 		if (typeof this.focusedItem === 'undefined') {
 			this.domNode.focus();
-			return;
 		}
 
 		for (let i = 0; i < this.items.length; i++) {
@@ -702,8 +703,12 @@ export class ActionBar implements IActionRunner {
 			let actionItem = <any>item;
 
 			if (i === this.focusedItem) {
-				if (types.isFunction(actionItem.focus)) {
-					actionItem.focus(fromRight);
+				if (types.isFunction(actionItem.isEnabled)) {
+					if (actionItem.isEnabled() && types.isFunction(actionItem.focus)) {
+						actionItem.focus(fromRight);
+					} else {
+						this.domNode.focus();
+					}
 				}
 			} else {
 				if (types.isFunction(actionItem.blur)) {
@@ -759,10 +764,10 @@ export class SelectActionItem extends BaseActionItem {
 	protected selectBox: SelectBox;
 	protected toDispose: lifecycle.IDisposable[];
 
-	constructor(ctx: any, action: IAction, options: string[], selected: number, contextViewProvider: IContextViewProvider
+	constructor(ctx: any, action: IAction, options: string[], selected: number, contextViewProvider: IContextViewProvider, selectBoxOptions?: ISelectBoxOptions
 	) {
 		super(ctx, action);
-		this.selectBox = new SelectBox(options, selected, contextViewProvider);
+		this.selectBox = new SelectBox(options, selected, contextViewProvider, null, selectBoxOptions);
 
 		this.toDispose = [];
 		this.toDispose.push(this.selectBox);

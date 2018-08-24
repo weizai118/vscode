@@ -9,7 +9,7 @@ import 'vs/css!./media/statusbarpart';
 import * as nls from 'vs/nls';
 import { toErrorMessage } from 'vs/base/common/errorMessage';
 import { TPromise } from 'vs/base/common/winjs.base';
-import { dispose, IDisposable } from 'vs/base/common/lifecycle';
+import { dispose, IDisposable, toDisposable } from 'vs/base/common/lifecycle';
 import { $ } from 'vs/base/browser/builder';
 import { OcticonLabel } from 'vs/base/browser/ui/octiconLabel/octiconLabel';
 import { Registry } from 'vs/platform/registry/common/platform';
@@ -33,7 +33,7 @@ import { INotificationService } from 'vs/platform/notification/common/notificati
 
 export class StatusbarPart extends Part implements IStatusbarService {
 
-	public _serviceBrand: any;
+	_serviceBrand: any;
 
 	private static readonly PRIORITY_PROP = 'priority';
 	private static readonly ALIGNMENT_PROP = 'alignment';
@@ -55,10 +55,10 @@ export class StatusbarPart extends Part implements IStatusbarService {
 	}
 
 	private registerListeners(): void {
-		this.toUnbind.push(this.contextService.onDidChangeWorkbenchState(() => this.updateStyles()));
+		this._register(this.contextService.onDidChangeWorkbenchState(() => this.updateStyles()));
 	}
 
-	public addEntry(entry: IStatusbarEntry, alignment: StatusbarAlignment, priority: number = 0): IDisposable {
+	addEntry(entry: IStatusbarEntry, alignment: StatusbarAlignment, priority: number = 0): IDisposable {
 
 		// Render entry in status bar
 		const el = this.doCreateStatusItem(alignment, priority, entry.showBeak ? 'has-beak' : void 0);
@@ -86,15 +86,13 @@ export class StatusbarPart extends Part implements IStatusbarService {
 			container.appendChild(el);
 		}
 
-		return {
-			dispose: () => {
-				$(el).destroy();
+		return toDisposable(() => {
+			$(el).destroy();
 
-				if (toDispose) {
-					toDispose.dispose();
-				}
+			if (toDispose) {
+				toDispose.dispose();
 			}
-		};
+		});
 	}
 
 	private getEntries(alignment: StatusbarAlignment): HTMLElement[] {
@@ -112,7 +110,7 @@ export class StatusbarPart extends Part implements IStatusbarService {
 		return entries;
 	}
 
-	public createContentArea(parent: HTMLElement): HTMLElement {
+	createContentArea(parent: HTMLElement): HTMLElement {
 		this.statusItemsContainer = parent;
 
 		// Fill in initial items that were contributed from the registry
@@ -122,16 +120,13 @@ export class StatusbarPart extends Part implements IStatusbarService {
 		const rightDescriptors = registry.items.filter(d => d.alignment === StatusbarAlignment.RIGHT).sort((a, b) => a.priority - b.priority);
 
 		const descriptors = rightDescriptors.concat(leftDescriptors); // right first because they float
-
-		this.toUnbind.push(...descriptors.map(descriptor => {
+		descriptors.forEach(descriptor => {
 			const item = this.instantiationService.createInstance(descriptor.syncDescriptor);
 			const el = this.doCreateStatusItem(descriptor.alignment, descriptor.priority);
 
-			const dispose = item.render(el);
+			this._register(item.render(el));
 			this.statusItemsContainer.appendChild(el);
-
-			return dispose;
-		}));
+		});
 
 		return this.statusItemsContainer;
 	}
@@ -139,22 +134,22 @@ export class StatusbarPart extends Part implements IStatusbarService {
 	protected updateStyles(): void {
 		super.updateStyles();
 
-		const container = $(this.getContainer());
+		const container = this.getContainer();
 
 		// Background colors
 		const backgroundColor = this.getColor(this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY ? STATUS_BAR_BACKGROUND : STATUS_BAR_NO_FOLDER_BACKGROUND);
-		container.style('background-color', backgroundColor);
-		container.style('color', this.getColor(this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY ? STATUS_BAR_FOREGROUND : STATUS_BAR_NO_FOLDER_FOREGROUND));
+		container.style.backgroundColor = backgroundColor;
+		container.style.color = this.getColor(this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY ? STATUS_BAR_FOREGROUND : STATUS_BAR_NO_FOLDER_FOREGROUND);
 
 		// Border color
 		const borderColor = this.getColor(this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY ? STATUS_BAR_BORDER : STATUS_BAR_NO_FOLDER_BORDER) || this.getColor(contrastBorder);
-		container.style('border-top-width', borderColor ? '1px' : null);
-		container.style('border-top-style', borderColor ? 'solid' : null);
-		container.style('border-top-color', borderColor);
+		container.style.borderTopWidth = borderColor ? '1px' : null;
+		container.style.borderTopStyle = borderColor ? 'solid' : null;
+		container.style.borderTopColor = borderColor;
 
 		// Notification Beak
 		if (!this.styleElement) {
-			this.styleElement = createStyleSheet(container.getHTMLElement());
+			this.styleElement = createStyleSheet(container);
 		}
 
 		this.styleElement.innerHTML = `.monaco-workbench > .part.statusbar > .statusbar-item.has-beak:before { border-bottom-color: ${backgroundColor}; }`;
@@ -179,7 +174,7 @@ export class StatusbarPart extends Part implements IStatusbarService {
 		return el;
 	}
 
-	public setStatusMessage(message: string, autoDisposeAfter: number = -1, delayBy: number = 0): IDisposable {
+	setStatusMessage(message: string, autoDisposeAfter: number = -1, delayBy: number = 0): IDisposable {
 		if (this.statusMsgDispose) {
 			this.statusMsgDispose.dispose(); // dismiss any previous
 		}
@@ -238,7 +233,7 @@ class StatusBarEntryItem implements IStatusbarItem {
 		}
 	}
 
-	public render(el: HTMLElement): IDisposable {
+	render(el: HTMLElement): IDisposable {
 		let toDispose: IDisposable[] = [];
 		addClass(el, 'statusbar-entry');
 
@@ -324,7 +319,7 @@ class ManageExtensionAction extends Action {
 		super('statusbar.manage.extension', nls.localize('manageExtension', "Manage Extension"));
 	}
 
-	public run(extensionId: string): TPromise<any> {
+	run(extensionId: string): TPromise<any> {
 		return this.commandService.executeCommand('_extensions.manage', extensionId);
 	}
 }

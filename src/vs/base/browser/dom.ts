@@ -486,8 +486,8 @@ export function getClientArea(element: HTMLElement): Dimension {
 		return new Dimension(window.innerWidth, window.innerHeight);
 	}
 
-	// Try with document.body.clientWidth / document.body.clientHeigh
-	if (document.body && document.body.clientWidth && document.body.clientWidth) {
+	// Try with document.body.clientWidth / document.body.clientHeight
+	if (document.body && document.body.clientWidth && document.body.clientHeight) {
 		return new Dimension(document.body.clientWidth, document.body.clientHeight);
 	}
 
@@ -819,6 +819,8 @@ export const EventType = {
 	MOUSE_OVER: 'mouseover',
 	MOUSE_MOVE: 'mousemove',
 	MOUSE_OUT: 'mouseout',
+	MOUSE_ENTER: 'mouseenter',
+	MOUSE_LEAVE: 'mouseleave',
 	CONTEXT_MENU: 'contextmenu',
 	WHEEL: 'wheel',
 	// Keyboard
@@ -838,6 +840,8 @@ export const EventType = {
 	SUBMIT: 'submit',
 	RESET: 'reset',
 	FOCUS: 'focus',
+	FOCUS_IN: 'focusin',
+	FOCUS_OUT: 'focusout',
 	BLUR: 'blur',
 	INPUT: 'input',
 	// Local Storage
@@ -916,7 +920,7 @@ class FocusTracker implements IFocusTracker {
 	private disposables: IDisposable[] = [];
 
 	constructor(element: HTMLElement | Window) {
-		let hasFocus = false;
+		let hasFocus = isAncestor(document.activeElement, <HTMLElement>element);
 		let loosingFocus = false;
 
 		let onFocus = () => {

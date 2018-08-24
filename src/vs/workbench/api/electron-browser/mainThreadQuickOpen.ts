@@ -12,6 +12,11 @@ import { ExtHostContext, MainThreadQuickOpenShape, ExtHostQuickOpenShape, Transf
 import { extHostNamedCustomer } from 'vs/workbench/api/electron-browser/extHostCustomers';
 import URI from 'vs/base/common/uri';
 
+interface QuickInputSession {
+	input: IQuickInput;
+	handlesToItems: Map<number, TransferQuickPickItems>;
+}
+
 @extHostNamedCustomer(MainContext.MainThreadQuickOpen)
 export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 
@@ -33,7 +38,7 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 	public dispose(): void {
 	}
 
-	$show(options: IPickOptions): TPromise<number | number[]> {
+	$show(options: IPickOptions<TransferQuickPickItems>): TPromise<number | number[]> {
 		const myToken = ++this._token;
 
 		this._contents = new TPromise<TransferQuickPickItems[]>((c, e) => {
@@ -50,16 +55,21 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 			};
 		});
 
+		options = {
+			...options,
+			onDidFocus: el => {
+				if (el) {
+					this._proxy.$onItemSelected((<TransferQuickPickItems>el).handle);
+				}
+			}
+		};
+
 		if (options.canPickMany) {
 			return asWinJsPromise(token => this._quickInputService.pick(this._contents, options as { canPickMany: true }, token)).then(items => {
 				if (items) {
 					return items.map(item => item.handle);
 				}
 				return undefined;
-			}, undefined, progress => {
-				if (progress) {
-					this._proxy.$onItemSelected((<TransferQuickPickItems>progress).handle);
-				}
 			});
 		} else {
 			return asWinJsPromise(token => this._quickInputService.pick(this._contents, options, token)).then(item => {
@@ -67,10 +77,6 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 					return item.handle;
 				}
 				return undefined;
-			}, undefined, progress => {
-				if (progress) {
-					this._proxy.$onItemSelected((<TransferQuickPickItems>progress).handle);
-				}
 			});
 		}
 	}
@@ -114,7 +120,7 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 
 	// ---- QuickInput
 
-	private sessions = new Map<number, IQuickInput>();
+	private sessions = new Map<number, QuickInputSession>();
 
 	$createOrUpdate(params: TransferQuickInput): TPromise<void> {
 		const sessionId = params.id;
@@ -140,11 +146,17 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 				input.onDidHide(() => {
 					this._proxy.$onDidHide(sessionId);
 				});
-				session = input;
+				session = {
+					input,
+					handlesToItems: new Map()
+				};
 			} else {
 				const input = this._quickInputService.createInputBox();
 				input.onDidAccept(() => {
 					this._proxy.$onDidAccept(sessionId);
+				});
+				input.onDidTriggerButton(button => {
+					this._proxy.$onDidTriggerButton(sessionId, (button as TransferQuickInputButton).handle);
 				});
 				input.onDidChangeValue(value => {
 					this._proxy.$onDidChangeValue(sessionId, value);
@@ -152,31 +164,51 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 				input.onDidHide(() => {
 					this._proxy.$onDidHide(sessionId);
 				});
-				session = input;
+				session = {
+					input,
+					handlesToItems: new Map()
+				};
 			}
 			this.sessions.set(sessionId, session);
 		}
+		const { input, handlesToItems } = session;
 		for (const param in params) {
 			if (param === 'id' || param === 'type') {
 				continue;
 			}
 			if (param === 'visible') {
 				if (params.visible) {
-					session.show();
+					input.show();
 				} else {
-					session.hide();
+					input.hide();
 				}
-			} else if (param === 'buttons') {
-				params.buttons.forEach(button => {
-					const iconPath = button.iconPath;
-					iconPath.dark = URI.revive(iconPath.dark);
-					if (iconPath.light) {
-						iconPath.light = URI.revive(iconPath.light);
-					}
+			} else if (param === 'items') {
+				handlesToItems.clear();
+				params[param].forEach(item => {
+					handlesToItems.set(item.handle, item);
 				});
-				session[param] = params[param];
+				input[param] = params[param];
+			} else if (param === 'activeItems' || param === 'selectedItems') {
+				input[param] = params[param]
+					.filter(handle => handlesToItems.has(handle))
+					.map(handle => handlesToItems.get(handle));
+			} else if (param === 'buttons') {
+				input[param] = params.buttons.map(button => {
+					if (button.handle === -1) {
+						return this._quickInputService.backButton;
+					}
+					const { iconPath, tooltip, handle } = button;
+					return {
+						iconPath: {
+							dark: URI.revive(iconPath.dark),
+							light: iconPath.light && URI.revive(iconPath.light)
+						},
+						tooltip,
+						handle
+					};
+				});
 			} else {
-				session[param] = params[param];
+				input[param] = params[param];
 			}
 		}
 		return TPromise.as(undefined);
@@ -185,7 +217,7 @@ export class MainThreadQuickOpen implements MainThreadQuickOpenShape {
 	$dispose(sessionId: number): TPromise<void> {
 		const session = this.sessions.get(sessionId);
 		if (session) {
-			session.dispose();
+			session.input.dispose();
 			this.sessions.delete(sessionId);
 		}
 		return TPromise.as(undefined);

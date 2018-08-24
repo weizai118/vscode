@@ -8,7 +8,7 @@ import { Button } from 'vs/base/browser/ui/button/button';
 import { Widget } from 'vs/base/browser/ui/widget';
 import * as arrays from 'vs/base/common/arrays';
 import { Delayer, ThrottledDelayer } from 'vs/base/common/async';
-import { CancellationToken } from 'vs/base/common/cancellation';
+import { CancellationToken, CancellationTokenSource } from 'vs/base/common/cancellation';
 import { IStringDictionary } from 'vs/base/common/collections';
 import { getErrorMessage, isPromiseCanceledError, onUnexpectedError } from 'vs/base/common/errors';
 import { Emitter, Event } from 'vs/base/common/event';
@@ -75,6 +75,18 @@ export class PreferencesEditor extends BaseEditor {
 
 	private lastFocusedWidget: SearchWidget | SideBySidePreferencesWidget = null;
 
+	get minimumWidth(): number { return this.sideBySidePreferencesWidget ? this.sideBySidePreferencesWidget.minimumWidth : 0; }
+	get maximumWidth(): number { return this.sideBySidePreferencesWidget ? this.sideBySidePreferencesWidget.maximumWidth : Number.POSITIVE_INFINITY; }
+
+	// these setters need to exist because this extends from BaseEditor
+	set minimumWidth(value: number) { /*noop*/ }
+	set maximumWidth(value: number) { /*noop*/ }
+
+	readonly minimumHeight = 260;
+
+	private _onDidCreateWidget = new Emitter<{ width: number; height: number; }>();
+	readonly onDidSizeConstraintsChange: Event<{ width: number; height: number; }> = this._onDidCreateWidget.event;
+
 	constructor(
 		@IPreferencesService private preferencesService: IPreferencesService,
 		@ITelemetryService telemetryService: ITelemetryService,
@@ -108,13 +120,14 @@ export class PreferencesEditor extends BaseEditor {
 		});
 		openSettings2Button.label = nls.localize('openSettings2Label', "new settings editor");
 		openSettings2Button.element.classList.add('open-settings2-button');
-		this._register(openSettings2Button.onDidClick(() => this.preferencesService.openSettings2()));
+		this._register(openSettings2Button.onDidClick(() => this.preferencesService.openSettings(false)));
 
 		this.searchWidget = this._register(this.instantiationService.createInstance(SearchWidget, this.headerContainer, {
 			ariaLabel: nls.localize('SearchSettingsWidget.AriaLabel', "Search settings"),
 			placeholder: nls.localize('SearchSettingsWidget.Placeholder', "Search Settings"),
 			focusKey: this.searchFocusContextKey,
-			showResultCount: true
+			showResultCount: true,
+			ariaLive: 'assertive'
 		}));
 		this._register(this.searchWidget.onDidChange(value => this.onInputChanged()));
 		this._register(this.searchWidget.onFocus(() => this.lastFocusedWidget = this.searchWidget));
@@ -122,6 +135,7 @@ export class PreferencesEditor extends BaseEditor {
 
 		const editorsContainer = DOM.append(parent, DOM.$('.preferences-editors-container'));
 		this.sideBySidePreferencesWidget = this._register(this.instantiationService.createInstance(SideBySidePreferencesWidget, editorsContainer));
+		this._onDidCreateWidget.fire();
 		this._register(this.sideBySidePreferencesWidget.onFocus(() => this.lastFocusedWidget = this.sideBySidePreferencesWidget));
 		this._register(this.sideBySidePreferencesWidget.onDidSettingsTargetChange(target => this.switchSettings(target)));
 
@@ -194,10 +208,6 @@ export class PreferencesEditor extends BaseEditor {
 		super.clearInput();
 	}
 
-	public supportsCenteredLayout(): boolean {
-		return false;
-	}
-
 	protected setEditorVisible(visible: boolean, group: IEditorGroup): void {
 		this.sideBySidePreferencesWidget.setEditorVisible(visible, group);
 		super.setEditorVisible(visible, group);
@@ -232,8 +242,8 @@ export class PreferencesEditor extends BaseEditor {
 	private triggerSearch(query: string): TPromise<void> {
 		if (query) {
 			return TPromise.join([
-				this.localSearchDelayer.trigger(() => this.preferencesRenderers.localFilterPreferences(query)),
-				this.remoteSearchThrottle.trigger(() => this.progressService.showWhile(this.preferencesRenderers.remoteSearchPreferences(query), 500))
+				this.localSearchDelayer.trigger(() => this.preferencesRenderers.localFilterPreferences(query).then(() => { })),
+				this.remoteSearchThrottle.trigger(() => TPromise.wrap(this.progressService.showWhile(this.preferencesRenderers.remoteSearchPreferences(query), 500)))
 			]) as TPromise;
 		} else {
 			// When clearing the input, update immediately to clear it
@@ -253,11 +263,11 @@ export class PreferencesEditor extends BaseEditor {
 		const promise = this.input && this.input.isDirty() ? this.input.save() : TPromise.as(true);
 		promise.done(value => {
 			if (target === ConfigurationTarget.USER) {
-				this.preferencesService.switchSettings(ConfigurationTarget.USER, this.preferencesService.userSettingsResource);
+				this.preferencesService.switchSettings(ConfigurationTarget.USER, this.preferencesService.userSettingsResource, true);
 			} else if (target === ConfigurationTarget.WORKSPACE) {
-				this.preferencesService.switchSettings(ConfigurationTarget.WORKSPACE, this.preferencesService.workspaceSettingsResource);
+				this.preferencesService.switchSettings(ConfigurationTarget.WORKSPACE, this.preferencesService.workspaceSettingsResource, true);
 			} else if (target instanceof URI) {
-				this.preferencesService.switchSettings(ConfigurationTarget.WORKSPACE_FOLDER, target);
+				this.preferencesService.switchSettings(ConfigurationTarget.WORKSPACE_FOLDER, target, true);
 			}
 		});
 	}
@@ -326,6 +336,11 @@ export class PreferencesEditor extends BaseEditor {
 			this._lastReportedFilter = filter;
 		}
 	}
+
+	dispose(): void {
+		this._onDidCreateWidget.dispose();
+		super.dispose();
+	}
 }
 
 class SettingsNavigator extends ArrayNavigator<ISetting> {
@@ -357,7 +372,7 @@ class PreferencesRenderersController extends Disposable {
 	private _editablePreferencesRendererDisposables: IDisposable[] = [];
 
 	private _settingsNavigator: SettingsNavigator;
-	private _remoteFilterInProgress: TPromise<any>;
+	private _remoteFilterCancelToken: CancellationTokenSource;
 	private _prefsModelsForSearch = new Map<string, ISettingsEditorModel>();
 
 	private _currentLocalSearchProvider: ISearchProvider;
@@ -420,9 +435,11 @@ class PreferencesRenderersController extends Disposable {
 		}
 	}
 
-	private async _onEditableContentDidChange(): TPromise<void> {
-		await this.localFilterPreferences(this._lastQuery, true);
-		await this.remoteSearchPreferences(this._lastQuery, true);
+	private async _onEditableContentDidChange(): Promise<void> {
+		const foundExactMatch = await this.localFilterPreferences(this._lastQuery, true);
+		if (!foundExactMatch) {
+			await this.remoteSearchPreferences(this._lastQuery, true);
+		}
 	}
 
 	onHidden(): void {
@@ -431,17 +448,25 @@ class PreferencesRenderersController extends Disposable {
 	}
 
 	remoteSearchPreferences(query: string, updateCurrentResults?: boolean): TPromise<void> {
-		if (this._remoteFilterInProgress && this._remoteFilterInProgress.cancel) {
-			// Resolved/rejected promises have no .cancel()
-			this._remoteFilterInProgress.cancel();
+		if (this.lastFilterResult && this.lastFilterResult.exactMatch) {
+			// Skip and clear remote search
+			query = '';
+		}
+
+		if (this._remoteFilterCancelToken) {
+			this._remoteFilterCancelToken.cancel();
+			this._remoteFilterCancelToken.dispose();
+			this._remoteFilterCancelToken = null;
 		}
 
 		this._currentRemoteSearchProvider = (updateCurrentResults && this._currentRemoteSearchProvider) || this.preferencesSearchService.getRemoteSearchProvider(query);
 
-		this._remoteFilterInProgress = this.filterOrSearchPreferences(query, this._currentRemoteSearchProvider, 'nlpResult', nls.localize('nlpResult', "Natural Language Results"), 1, updateCurrentResults);
-
-		return this._remoteFilterInProgress.then(() => {
-			this._remoteFilterInProgress = null;
+		this._remoteFilterCancelToken = new CancellationTokenSource();
+		return this.filterOrSearchPreferences(query, this._currentRemoteSearchProvider, 'nlpResult', nls.localize('nlpResult', "Natural Language Results"), 1, this._remoteFilterCancelToken.token, updateCurrentResults).then(() => {
+			if (this._remoteFilterCancelToken) {
+				this._remoteFilterCancelToken.dispose();
+				this._remoteFilterCancelToken = null;
+			}
 		}, err => {
 			if (isPromiseCanceledError(err)) {
 				return null;
@@ -451,23 +476,24 @@ class PreferencesRenderersController extends Disposable {
 		});
 	}
 
-	localFilterPreferences(query: string, updateCurrentResults?: boolean): TPromise<void> {
+	localFilterPreferences(query: string, updateCurrentResults?: boolean): TPromise<boolean> {
 		if (this._settingsNavigator) {
 			this._settingsNavigator.reset();
 		}
 
 		this._currentLocalSearchProvider = (updateCurrentResults && this._currentLocalSearchProvider) || this.preferencesSearchService.getLocalSearchProvider(query);
-		return this.filterOrSearchPreferences(query, this._currentLocalSearchProvider, 'filterResult', nls.localize('filterResult', "Filtered Results"), 0, updateCurrentResults);
+		return this.filterOrSearchPreferences(query, this._currentLocalSearchProvider, 'filterResult', nls.localize('filterResult', "Filtered Results"), 0, undefined, updateCurrentResults);
 	}
 
-	private filterOrSearchPreferences(query: string, searchProvider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number, editableContentOnly?: boolean): TPromise<void> {
+	private filterOrSearchPreferences(query: string, searchProvider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number, token?: CancellationToken, editableContentOnly?: boolean): TPromise<boolean> {
 		this._lastQuery = query;
 
-		const filterPs: TPromise<any>[] = [this._filterOrSearchPreferences(query, this.editablePreferencesRenderer, searchProvider, groupId, groupLabel, groupOrder)];
+		const filterPs: TPromise<IFilterResult>[] = [this._filterOrSearchPreferences(query, this.editablePreferencesRenderer, searchProvider, groupId, groupLabel, groupOrder, token)];
 		if (!editableContentOnly) {
 			filterPs.push(
-				this._filterOrSearchPreferences(query, this.defaultPreferencesRenderer, searchProvider, groupId, groupLabel, groupOrder));
-			filterPs.push(this.searchAllSettingsTargets(query, searchProvider, groupId, groupLabel, groupOrder));
+				this._filterOrSearchPreferences(query, this.defaultPreferencesRenderer, searchProvider, groupId, groupLabel, groupOrder, token));
+			filterPs.push(
+				this.searchAllSettingsTargets(query, searchProvider, groupId, groupLabel, groupOrder, token).then(() => null));
 		}
 
 		return TPromise.join(filterPs).then(results => {
@@ -479,33 +505,35 @@ class PreferencesRenderersController extends Disposable {
 
 			this.consolidateAndUpdate(defaultFilterResult, editableFilterResult);
 			this._lastFilterResult = defaultFilterResult;
+
+			return defaultFilterResult && defaultFilterResult.exactMatch;
 		});
 	}
 
-	private searchAllSettingsTargets(query: string, searchProvider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number): TPromise<void> {
+	private searchAllSettingsTargets(query: string, searchProvider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number, token?: CancellationToken): TPromise<void> {
 		const searchPs = [
-			this.searchSettingsTarget(query, searchProvider, ConfigurationTarget.WORKSPACE, groupId, groupLabel, groupOrder),
-			this.searchSettingsTarget(query, searchProvider, ConfigurationTarget.USER, groupId, groupLabel, groupOrder)
+			this.searchSettingsTarget(query, searchProvider, ConfigurationTarget.WORKSPACE, groupId, groupLabel, groupOrder, token),
+			this.searchSettingsTarget(query, searchProvider, ConfigurationTarget.USER, groupId, groupLabel, groupOrder, token)
 		];
 
 		for (const folder of this.workspaceContextService.getWorkspace().folders) {
 			const folderSettingsResource = this.preferencesService.getFolderSettingsResource(folder.uri);
-			searchPs.push(this.searchSettingsTarget(query, searchProvider, folderSettingsResource, groupId, groupLabel, groupOrder));
+			searchPs.push(this.searchSettingsTarget(query, searchProvider, folderSettingsResource, groupId, groupLabel, groupOrder, token));
 		}
 
 
 		return TPromise.join(searchPs).then(() => { });
 	}
 
-	private searchSettingsTarget(query: string, provider: ISearchProvider, target: SettingsTarget, groupId: string, groupLabel: string, groupOrder: number): TPromise<void> {
+	private searchSettingsTarget(query: string, provider: ISearchProvider, target: SettingsTarget, groupId: string, groupLabel: string, groupOrder: number, token?: CancellationToken): Promise<void> {
 		if (!query) {
 			// Don't open the other settings targets when query is empty
 			this._onDidFilterResultsCountChange.fire({ target, count: 0 });
-			return TPromise.wrap(null);
+			return Promise.resolve(null);
 		}
 
 		return this.getPreferencesEditorModel(target).then(model => {
-			return model && this._filterOrSearchPreferencesModel('', <ISettingsEditorModel>model, provider, groupId, groupLabel, groupOrder);
+			return model && this._filterOrSearchPreferencesModel('', <ISettingsEditorModel>model, provider, groupId, groupLabel, groupOrder, token);
 		}).then(result => {
 			const count = result ? this._flatten(result.filteredGroups).length : 0;
 			this._onDidFilterResultsCountChange.fire({ target, count });
@@ -518,7 +546,7 @@ class PreferencesRenderersController extends Disposable {
 		});
 	}
 
-	private async getPreferencesEditorModel(target: SettingsTarget): TPromise<ISettingsEditorModel | null> {
+	private async getPreferencesEditorModel(target: SettingsTarget): Promise<ISettingsEditorModel | null> {
 		const resource = target === ConfigurationTarget.USER ? this.preferencesService.userSettingsResource :
 			target === ConfigurationTarget.WORKSPACE ? this.preferencesService.workspaceSettingsResource :
 				target;
@@ -563,20 +591,20 @@ class PreferencesRenderersController extends Disposable {
 		}
 	}
 
-	private _filterOrSearchPreferences(filter: string, preferencesRenderer: IPreferencesRenderer<ISetting>, provider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number): TPromise<IFilterResult> {
+	private _filterOrSearchPreferences(filter: string, preferencesRenderer: IPreferencesRenderer<ISetting>, provider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number, token?: CancellationToken): TPromise<IFilterResult> {
 		if (!preferencesRenderer) {
 			return TPromise.wrap(null);
 		}
 
 		const model = <ISettingsEditorModel>preferencesRenderer.preferencesModel;
-		return this._filterOrSearchPreferencesModel(filter, model, provider, groupId, groupLabel, groupOrder).then(filterResult => {
+		return this._filterOrSearchPreferencesModel(filter, model, provider, groupId, groupLabel, groupOrder, token).then(filterResult => {
 			preferencesRenderer.filterPreferences(filterResult);
 			return filterResult;
 		});
 	}
 
-	private _filterOrSearchPreferencesModel(filter: string, model: ISettingsEditorModel, provider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number): TPromise<IFilterResult> {
-		const searchP = provider ? provider.searchModel(model) : TPromise.wrap(null);
+	private _filterOrSearchPreferencesModel(filter: string, model: ISettingsEditorModel, provider: ISearchProvider, groupId: string, groupLabel: string, groupOrder: number, token?: CancellationToken): TPromise<IFilterResult> {
+		const searchP = provider ? provider.searchModel(model, token) : TPromise.wrap(null);
 		return searchP
 			.then<ISearchResult>(null, err => {
 				if (isPromiseCanceledError(err)) {
@@ -598,6 +626,10 @@ class PreferencesRenderersController extends Disposable {
 				}
 			})
 			.then(searchResult => {
+				if (token && token.isCancellationRequested) {
+					searchResult = null;
+				}
+
 				const filterResult = searchResult ?
 					model.updateResultGroup(groupId, {
 						id: groupId,
@@ -609,6 +641,7 @@ class PreferencesRenderersController extends Disposable {
 
 				if (filterResult) {
 					filterResult.query = filter;
+					filterResult.exactMatch = searchResult && searchResult.exactMatch;
 				}
 
 				return filterResult;
@@ -755,6 +788,9 @@ class SideBySidePreferencesWidget extends Widget {
 	private lastFocusedEditor: BaseEditor;
 	private splitview: SplitView;
 
+	get minimumWidth(): number { return this.splitview.minimumSize; }
+	get maximumWidth(): number { return this.splitview.maximumSize; }
+
 	constructor(
 		parentElement: HTMLElement,
 		@IInstantiationService private instantiationService: IInstantiationService,
@@ -815,7 +851,7 @@ class SideBySidePreferencesWidget extends Widget {
 		this._register(focusTracker.onDidFocus(() => this._onFocus.fire()));
 	}
 
-	public setInput(defaultPreferencesEditorInput: DefaultPreferencesEditorInput, editablePreferencesEditorInput: EditorInput, options: EditorOptions, token: CancellationToken): TPromise<{ defaultPreferencesRenderer: IPreferencesRenderer<ISetting>, editablePreferencesRenderer: IPreferencesRenderer<ISetting> }> {
+	public setInput(defaultPreferencesEditorInput: DefaultPreferencesEditorInput, editablePreferencesEditorInput: EditorInput, options: EditorOptions, token: CancellationToken): TPromise<{ defaultPreferencesRenderer?: IPreferencesRenderer<ISetting>, editablePreferencesRenderer?: IPreferencesRenderer<ISetting> }> {
 		this.getOrCreateEditablePreferencesEditor(editablePreferencesEditorInput);
 		this.settingsTargetsWidget.settingsTarget = this.getSettingsTarget(editablePreferencesEditorInput.getResource());
 		return TPromise.join([
@@ -824,7 +860,7 @@ class SideBySidePreferencesWidget extends Widget {
 		])
 			.then(([defaultPreferencesRenderer, editablePreferencesRenderer]) => {
 				if (token.isCancellationRequested) {
-					return void 0;
+					return {};
 				}
 
 				this.defaultPreferencesHeader.textContent = defaultPreferencesRenderer && this.getDefaultPreferencesHeaderText((<DefaultSettingsEditorModel>defaultPreferencesRenderer.preferencesModel).target);
@@ -970,8 +1006,8 @@ export class DefaultPreferencesEditor extends BaseTextEditor {
 		const editor = this.instantiationService.createInstance(CodeEditorWidget, parent, configuration, { contributions: DefaultPreferencesEditor._getContributions() });
 
 		// Inform user about editor being readonly if user starts type
-		this.toUnbind.push(editor.onDidType(() => this.showReadonlyHint(editor)));
-		this.toUnbind.push(editor.onDidPaste(() => this.showReadonlyHint(editor)));
+		this._register(editor.onDidType(() => this.showReadonlyHint(editor)));
+		this._register(editor.onDidPaste(() => this.showReadonlyHint(editor)));
 
 		return editor;
 	}
@@ -1032,10 +1068,6 @@ export class DefaultPreferencesEditor extends BaseTextEditor {
 
 	public layout(dimension: DOM.Dimension) {
 		this.getControl().layout(dimension);
-	}
-
-	public supportsCenteredLayout(): boolean {
-		return false;
 	}
 
 	protected getAriaLabel(): string {

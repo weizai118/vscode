@@ -16,9 +16,9 @@ import * as strings from 'vs/base/common/strings';
 import { TPromise } from 'vs/base/common/winjs.base';
 import * as encoding from 'vs/base/node/encoding';
 import * as extfs from 'vs/base/node/extfs';
-import { IProgress } from 'vs/platform/search/common/search';
+import { IProgress, ITextSearchStats } from 'vs/platform/search/common/search';
 import { rgPath } from 'vscode-ripgrep';
-import { FileMatch, IFolderSearch, IRawSearch, ISerializedFileMatch, ISerializedSearchComplete, LineMatch } from './search';
+import { FileMatch, IFolderSearch, IRawSearch, ISerializedFileMatch, LineMatch, ISerializedSearchSuccess } from './search';
 
 // If vscode-ripgrep is in an .asar file, then the binary is unpacked.
 const rgDiskPath = rgPath.replace(/\bnode_modules\.asar\b/, 'node_modules.asar.unpacked');
@@ -44,12 +44,15 @@ export class RipgrepEngine {
 	}
 
 	// TODO@Rob - make promise-based once the old search is gone, and I don't need them to have matching interfaces anymore
-	search(onResult: (match: ISerializedFileMatch) => void, onMessage: (message: IProgress) => void, done: (error: Error, complete: ISerializedSearchComplete) => void): void {
+	search(onResult: (match: ISerializedFileMatch) => void, onMessage: (message: IProgress) => void, done: (error: Error, complete: ISerializedSearchSuccess) => void): void {
 		if (!this.config.folderQueries.length && !this.config.extraFiles.length) {
 			process.removeListener('exit', this.killRgProcFn);
 			done(null, {
+				type: 'success',
 				limitHit: false,
-				stats: null
+				stats: <ITextSearchStats>{
+					type: 'searchProcess'
+				}
 			});
 			return;
 		}
@@ -60,25 +63,24 @@ export class RipgrepEngine {
 		}
 
 		const cwd = platform.isWindows ? 'c:/' : '/';
-		process.nextTick(() => { // Allow caller to register progress callback
-			const escapedArgs = rgArgs.args
-				.map(arg => arg.match(/^-/) ? arg : `'${arg}'`)
-				.join(' ');
+		const escapedArgs = rgArgs.args
+			.map(arg => arg.match(/^-/) ? arg : `'${arg}'`)
+			.join(' ');
 
-			let rgCmd = `rg ${escapedArgs}\n - cwd: ${cwd}`;
-			if (rgArgs.siblingClauses) {
-				rgCmd += `\n - Sibling clauses: ${JSON.stringify(rgArgs.siblingClauses)}`;
-			}
+		let rgCmd = `rg ${escapedArgs}\n - cwd: ${cwd}`;
+		if (rgArgs.siblingClauses) {
+			rgCmd += `\n - Sibling clauses: ${JSON.stringify(rgArgs.siblingClauses)}`;
+		}
 
-			onMessage({ message: rgCmd });
-		});
+		onMessage({ message: rgCmd });
+
 		this.rgProc = cp.spawn(rgDiskPath, rgArgs.args, { cwd });
 		process.once('exit', this.killRgProcFn);
 
 		this.ripgrepParser = new RipgrepParser(this.config.maxResults, cwd, this.config.extraFiles);
 		this.ripgrepParser.on('result', (match: ISerializedFileMatch) => {
 			if (this.postProcessExclusions) {
-				const handleResultP = (<TPromise<string>>this.postProcessExclusions(match.path, undefined, () => getSiblings(match.path)))
+				const handleResultP = (<TPromise<string>>this.postProcessExclusions(match.path, undefined, glob.hasSiblingPromiseFn(() => getSiblings(match.path))))
 					.then(globMatch => {
 						if (!globMatch) {
 							onResult(match);
@@ -94,8 +96,11 @@ export class RipgrepEngine {
 			this.cancel();
 			process.removeListener('exit', this.killRgProcFn);
 			done(null, {
+				type: 'success',
 				limitHit: true,
-				stats: null
+				stats: {
+					type: 'searchProcess'
+				}
 			});
 		});
 
@@ -124,11 +129,13 @@ export class RipgrepEngine {
 					process.removeListener('exit', this.killRgProcFn);
 					if (stderr && !gotData && (displayMsg = rgErrorMsgForDisplay(stderr))) {
 						done(new Error(displayMsg), {
+							type: 'success',
 							limitHit: false,
 							stats: null
 						});
 					} else {
 						done(null, {
+							type: 'success',
 							limitHit: false,
 							stats: null
 						});
@@ -145,10 +152,15 @@ export class RipgrepEngine {
  * "failed" when a fatal error was produced.
  */
 export function rgErrorMsgForDisplay(msg: string): string | undefined {
-	const firstLine = msg.split('\n')[0].trim();
+	const lines = msg.trim().split('\n');
+	const firstLine = lines[0].trim();
 
 	if (strings.startsWith(firstLine, 'Error parsing regex')) {
 		return firstLine;
+	}
+
+	if (strings.startsWith(firstLine, 'regex parse error')) {
+		return strings.uppercaseFirstLetter(lines[lines.length - 1].trim());
 	}
 
 	if (strings.startsWith(firstLine, 'error parsing glob') ||
@@ -498,6 +510,7 @@ function getRgArgs(config: IRawSearch) {
 	}
 
 	args.push('--no-config');
+	args.push('--no-ignore-global');
 
 	// Folder to search
 	args.push('--');
