@@ -6,7 +6,7 @@
 import { CancelablePromise, createCancelablePromise } from 'vs/base/common/async';
 import { debounceEvent, Emitter, Event } from 'vs/base/common/event';
 import { dispose, IDisposable } from 'vs/base/common/lifecycle';
-import URI from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
 import { Position } from 'vs/editor/common/core/position';
@@ -49,11 +49,8 @@ export class CodeActionOracle {
 
 	private _onMarkerChanges(resources: URI[]): void {
 		const { uri } = this._editor.getModel();
-		for (const resource of resources) {
-			if (resource.toString() === uri.toString()) {
-				this.trigger({ type: 'auto' });
-				return;
-			}
+		if (resources.some(resource => resource.toString() === uri.toString())) {
+			this.trigger({ type: 'auto' });
 		}
 	}
 

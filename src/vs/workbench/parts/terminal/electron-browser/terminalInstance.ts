@@ -563,7 +563,7 @@ export class TerminalInstance implements ITerminalInstance {
 		this._terminalFocusContextKey.set(terminalFocused);
 	}
 
-	public dispose(): void {
+	public dispose(isShuttingDown?: boolean): void {
 		this._logService.trace(`terminalInstance#dispose (id: ${this.id})`);
 
 		this._windowsShellHelper = lifecycle.dispose(this._windowsShellHelper);
@@ -588,7 +588,9 @@ export class TerminalInstance implements ITerminalInstance {
 			this._xterm.dispose();
 			this._xterm = null;
 		}
-		this._processManager = lifecycle.dispose(this._processManager);
+		if (this._processManager) {
+			this._processManager.dispose(isShuttingDown);
+		}
 		if (!this._isDisposed) {
 			this._isDisposed = true;
 			this._onDisposed.fire(this);
@@ -597,15 +599,17 @@ export class TerminalInstance implements ITerminalInstance {
 	}
 
 	public focus(force?: boolean): void {
-		this._xtermReadyPromise.then(() => {
-			if (!this._xterm) {
-				return;
-			}
-			const text = window.getSelection().toString();
-			if (!text || force) {
-				this._xterm.focus();
-			}
-		});
+		if (!this._xterm) {
+			return;
+		}
+		const text = window.getSelection().toString();
+		if (!text || force) {
+			this._xterm.focus();
+		}
+	}
+
+	public focusWhenReady(force?: boolean): Promise<void> {
+		return this._xtermReadyPromise.then(() => this.focus(force));
 	}
 
 	public paste(): void {

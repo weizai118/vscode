@@ -4277,7 +4277,7 @@ suite('autoClosingPairs', () => {
 			],
 			languageIdentifier: mode.getLanguageIdentifier(),
 			editorOpts: {
-				autoWrapping: 'never'
+				autoSurround: 'never'
 			}
 		}, (model, cursor) => {
 
@@ -4297,7 +4297,7 @@ suite('autoClosingPairs', () => {
 			],
 			languageIdentifier: mode.getLanguageIdentifier(),
 			editorOpts: {
-				autoWrapping: 'quotes'
+				autoSurround: 'quotes'
 			}
 		}, (model, cursor) => {
 
@@ -4320,7 +4320,7 @@ suite('autoClosingPairs', () => {
 			],
 			languageIdentifier: mode.getLanguageIdentifier(),
 			editorOpts: {
-				autoWrapping: 'brackets'
+				autoSurround: 'brackets'
 			}
 		}, (model, cursor) => {
 
@@ -4380,6 +4380,51 @@ suite('autoClosingPairs', () => {
 					}
 				}
 			}
+		});
+		mode.dispose();
+	});
+
+	test('issue #55314: Do not auto-close when ending with open', () => {
+		const languageId = new LanguageIdentifier('myElectricMode', 5);
+		class ElectricMode extends MockMode {
+			constructor() {
+				super(languageId);
+				this._register(LanguageConfigurationRegistry.register(this.getLanguageIdentifier(), {
+					autoClosingPairs: [
+						{ open: '{', close: '}' },
+						{ open: '[', close: ']' },
+						{ open: '(', close: ')' },
+						{ open: '\'', close: '\'', notIn: ['string', 'comment'] },
+						{ open: '\"', close: '\"', notIn: ['string'] },
+						{ open: 'B\"', close: '\"', notIn: ['string', 'comment'] },
+						{ open: '`', close: '`', notIn: ['string', 'comment'] },
+						{ open: '/**', close: ' */', notIn: ['string'] }
+					],
+				}));
+			}
+		}
+
+		const mode = new ElectricMode();
+
+		usingCursor({
+			text: [
+				'little goat',
+				'little LAMB',
+				'little sheep',
+				'Big LAMB'
+			],
+			languageIdentifier: mode.getLanguageIdentifier()
+		}, (model, cursor) => {
+			model.forceTokenization(model.getLineCount());
+			assertType(model, cursor, 1, 4, '"', '"', `does not double quote when ending with open`);
+			model.forceTokenization(model.getLineCount());
+			assertType(model, cursor, 2, 4, '"', '"', `does not double quote when ending with open`);
+			model.forceTokenization(model.getLineCount());
+			assertType(model, cursor, 3, 4, '"', '"', `does not double quote when ending with open`);
+			model.forceTokenization(model.getLineCount());
+			assertType(model, cursor, 4, 2, '"', '""', `double quote when ending with open`);
+			model.forceTokenization(model.getLineCount());
+			assertType(model, cursor, 4, 3, '"', '"', `does not double quote when ending with open`);
 		});
 		mode.dispose();
 	});

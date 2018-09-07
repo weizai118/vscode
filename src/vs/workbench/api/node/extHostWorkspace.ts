@@ -13,7 +13,7 @@ import { normalize } from 'vs/base/common/paths';
 import { isLinux } from 'vs/base/common/platform';
 import { basenameOrAuthority, dirname, isEqual } from 'vs/base/common/resources';
 import { compare } from 'vs/base/common/strings';
-import URI from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { localize } from 'vs/nls';
 import { ILogService } from 'vs/platform/log/common/log';
@@ -24,6 +24,7 @@ import { Range } from 'vs/workbench/api/node/extHostTypes';
 import { IExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
 import * as vscode from 'vscode';
 import { ExtHostWorkspaceShape, IMainContext, IWorkspaceData, MainContext, MainThreadMessageServiceShape, MainThreadWorkspaceShape } from './extHost.protocol';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 function isFolderEqual(folderA: URI, folderB: URI): boolean {
 	return isEqual(folderA, folderB, !isLinux);
@@ -151,7 +152,7 @@ export class ExtHostWorkspace implements ExtHostWorkspaceShape {
 
 	readonly onDidChangeWorkspace: Event<vscode.WorkspaceFoldersChangeEvent> = this._onDidChangeWorkspace.event;
 
-	private readonly _activeSearchCallbacks = [];
+	private readonly _activeSearchCallbacks: ((match: IRawFileMatch2) => any)[] = [];
 
 	constructor(
 		mainContext: IMainContext,
@@ -345,10 +346,8 @@ export class ExtHostWorkspace implements ExtHostWorkspaceShape {
 
 	// --- search ---
 
-	findFiles(include: vscode.GlobPattern, exclude: vscode.GlobPattern, maxResults: number, extensionId: string, token?: vscode.CancellationToken): Thenable<vscode.Uri[]> {
+	findFiles(include: vscode.GlobPattern, exclude: vscode.GlobPattern, maxResults: number, extensionId: string, token: vscode.CancellationToken = CancellationToken.None): Thenable<vscode.Uri[]> {
 		this._logService.trace(`extHostWorkspace#findFiles: fileSearch, extension: ${extensionId}, entryPoint: findFiles`);
-
-		const requestId = this._requestIdProvider.getNext();
 
 		let includePattern: string;
 		let includeFolder: string;
@@ -372,15 +371,20 @@ export class ExtHostWorkspace implements ExtHostWorkspaceShape {
 			}
 		}
 
-		const result = this._proxy.$startFileSearch(includePattern, includeFolder, excludePatternOrDisregardExcludes, maxResults, requestId);
-		if (token) {
-			token.onCancellationRequested(() => this._proxy.$cancelSearch(requestId));
+		if (token && token.isCancellationRequested) {
+			return TPromise.wrap([]);
 		}
-		return result.then(data => Array.isArray(data) ? data.map(URI.revive) : []);
+
+		return this._proxy.$startFileSearch(includePattern, includeFolder, excludePatternOrDisregardExcludes, maxResults, token)
+			.then(data => Array.isArray(data) ? data.map(URI.revive) : []);
 	}
 
-	findTextInFiles(query: vscode.TextSearchQuery, options: vscode.FindTextInFilesOptions, callback: (result: vscode.TextSearchResult) => void, extensionId: string, token?: vscode.CancellationToken) {
+	findTextInFiles(query: vscode.TextSearchQuery, options: vscode.FindTextInFilesOptions, callback: (result: vscode.TextSearchResult) => void, extensionId: string, token: vscode.CancellationToken = CancellationToken.None) {
 		this._logService.trace(`extHostWorkspace#findTextInFiles: textSearch, extension: ${extensionId}, entryPoint: findTextInFiles`);
+
+		if (options.previewOptions && options.previewOptions.totalChars <= options.previewOptions.leadingChars) {
+			throw new Error('findTextInFiles: previewOptions.totalChars must be > previewOptions.leadingChars');
+		}
 
 		const requestId = this._requestIdProvider.getNext();
 
@@ -398,6 +402,7 @@ export class ExtHostWorkspace implements ExtHostWorkspaceShape {
 			disregardExcludeSettings: options.exclude === null,
 			fileEncoding: options.encoding,
 			maxResults: options.maxResults,
+			previewOptions: options.previewOptions,
 
 			includePattern: options.include && globPatternToString(options.include),
 			excludePattern: options.exclude && globPatternToString(options.exclude)
@@ -410,26 +415,23 @@ export class ExtHostWorkspace implements ExtHostWorkspaceShape {
 				return;
 			}
 
-			p.lineMatches.forEach(lineMatch => {
-				lineMatch.offsetAndLengths.forEach(offsetAndLength => {
-					const range = new Range(lineMatch.lineNumber, offsetAndLength[0], lineMatch.lineNumber, offsetAndLength[0] + offsetAndLength[1]);
-					callback({
-						uri: URI.revive(p.resource),
-						preview: { text: lineMatch.preview, match: range },
-						range
-					});
+			p.matches.forEach(match => {
+				callback({
+					uri: URI.revive(p.resource),
+					preview: {
+						text: match.preview.text,
+						match: new Range(match.preview.match.startLineNumber, match.preview.match.startColumn, match.preview.match.endLineNumber, match.preview.match.endColumn)
+					},
+					range: new Range(match.range.startLineNumber, match.range.startColumn, match.range.endLineNumber, match.range.endColumn)
 				});
 			});
 		};
 
-		if (token) {
-			token.onCancellationRequested(() => {
-				isCanceled = true;
-				this._proxy.$cancelSearch(requestId);
-			});
+		if (token.isCancellationRequested) {
+			return TPromise.wrap(undefined);
 		}
 
-		return this._proxy.$startTextSearch(query, queryOptions, requestId).then(
+		return this._proxy.$startTextSearch(query, queryOptions, requestId, token).then(
 			() => {
 				delete this._activeSearchCallbacks[requestId];
 			},
