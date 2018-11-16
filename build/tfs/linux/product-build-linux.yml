@@ -1,11 +1,11 @@
 steps:
 - task: NodeTool@0
   inputs:
-    versionSpec: "8.9.1"
+    versionSpec: "8.12.0"
 
 - task: geeklearningio.gl-vsts-tasks-yarn.yarn-installer-task.YarnInstaller@2
   inputs:
-    versionSpec: "1.9.4"
+    versionSpec: "1.10.1"
 
 - script: |
     set -e
@@ -15,9 +15,10 @@ steps:
     fi
 
     echo "machine monacotools.visualstudio.com password $(VSO_PAT)" > ~/.netrc
-    yarn
+    CHILD_CONCURRENCY=1 yarn
     npm run gulp -- hygiene
     npm run monaco-compile-check
+    npm run strict-null-check
     VSCODE_MIXIN_PASSWORD="$(VSCODE_MIXIN_PASSWORD)" npm run gulp -- mixin
     node build/tfs/common/installDistro.js
     node build/lib/builtInExtensions.js
@@ -91,5 +92,20 @@ steps:
     MOONCAKE_STORAGE_ACCESS_KEY="$(MOONCAKE_STORAGE_ACCESS_KEY)" \
     node build/tfs/common/publish.js "$VSCODE_QUALITY" "$PLATFORM_RPM" package "$RPM_FILENAME" "$VERSION" true "$RPM_PATH"
 
-    # SNAP_FILENAME="$(ls $REPO/.build/linux/snap/$ARCH/ | grep .snap)"
-    # SNAP_PATH="$REPO/.build/linux/snap/$ARCH/$SNAP_FILENAME"
+    # Publish Snap
+    npm run gulp -- "vscode-linux-$(VSCODE_ARCH)-prepare-snap"
+
+    # Pack snap tarball artifact, in order to preserve file perms
+    mkdir -p $REPO/.build/linux/snap-tarball
+    SNAP_TARBALL_PATH="$REPO/.build/linux/snap-tarball/snap-$(VSCODE_ARCH).tar.gz"
+    rm -rf $SNAP_TARBALL_PATH
+    (cd .build/linux && tar -czf $SNAP_TARBALL_PATH snap)
+
+- task: ms.vss-governance-buildtask.governance-build-task-component-detection.ComponentGovernanceComponentDetection@0
+  displayName: 'Component Detection'
+
+- task: PublishPipelineArtifact@0
+  displayName: 'Publish Pipeline Artifact'
+  inputs:
+    artifactName: snap-$(VSCODE_ARCH)
+    targetPath: .build/linux/snap-tarball

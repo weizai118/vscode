@@ -2,7 +2,6 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as nls from 'vs/nls';
 import * as dom from 'vs/base/browser/dom';
@@ -37,65 +36,13 @@ import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { MarkdownRenderer } from 'vs/editor/contrib/markdown/markdownRenderer';
 import { IMarginData } from 'vs/editor/browser/controller/mouseTarget';
 import { ModelDecorationOptions } from 'vs/editor/common/model/textModel';
+import { CommentNode } from 'vs/workbench/parts/comments/electron-browser/commentNode';
+import { IDialogService } from 'vs/platform/dialogs/common/dialogs';
+import { INotificationService } from 'vs/platform/notification/common/notification';
 
 export const COMMENTEDITOR_DECORATION_KEY = 'commenteditordecoration';
-const EXPAND_ACTION_CLASS = 'expand-review-action octicon octicon-chevron-down';
-const COLLAPSE_ACTION_CLASS = 'expand-review-action octicon octicon-chevron-up';
+const COLLAPSE_ACTION_CLASS = 'expand-review-action octicon octicon-x';
 const COMMENT_SCHEME = 'comment';
-
-export class CommentNode {
-	private _domNode: HTMLElement;
-	private _body: HTMLElement;
-	private _md: HTMLElement;
-	private _clearTimeout: any;
-
-	public get domNode(): HTMLElement {
-		return this._domNode;
-	}
-
-	constructor(
-		public comment: modes.Comment,
-		private markdownRenderer: MarkdownRenderer,
-	) {
-		this._domNode = dom.$('div.review-comment');
-		this._domNode.tabIndex = 0;
-		let avatar = dom.append(this._domNode, dom.$('div.avatar-container'));
-		let img = <HTMLImageElement>dom.append(avatar, dom.$('img.avatar'));
-		img.src = comment.gravatar;
-		let commentDetailsContainer = dom.append(this._domNode, dom.$('.review-comment-contents'));
-
-		let header = dom.append(commentDetailsContainer, dom.$('div'));
-		let author = dom.append(header, dom.$('strong.author'));
-		author.innerText = comment.userName;
-		this._body = dom.append(commentDetailsContainer, dom.$('div.comment-body'));
-		this._md = this.markdownRenderer.render(comment.body).element;
-		this._body.appendChild(this._md);
-
-		this._domNode.setAttribute('aria-label', `${comment.userName}, ${comment.body.value}`);
-		this._domNode.setAttribute('role', 'treeitem');
-		this._clearTimeout = null;
-	}
-
-	update(newComment: modes.Comment) {
-		if (newComment.body !== this.comment.body) {
-			this._body.removeChild(this._md);
-			this._md = this.markdownRenderer.render(newComment.body).element;
-			this._body.appendChild(this._md);
-		}
-
-		this.comment = newComment;
-	}
-
-	focus() {
-		this.domNode.focus();
-		if (!this._clearTimeout) {
-			dom.addClass(this.domNode, 'focus');
-			this._clearTimeout = setTimeout(() => {
-				dom.removeClass(this.domNode, 'focus');
-			}, 3000);
-		}
-	}
-}
 
 let INMEM_MODEL_ID = 0;
 
@@ -113,17 +60,18 @@ export class ReviewZoneWidget extends ZoneWidget {
 	private _onDidClose = new Emitter<ReviewZoneWidget>();
 	private _onDidCreateThread = new Emitter<ReviewZoneWidget>();
 	private _isCollapsed;
-	private _toggleAction: Action;
+	private _collapseAction: Action;
 	private _commentThread: modes.CommentThread;
 	private _commentGlyph: CommentGlyphWidget;
-	private _owner: number;
+	private _owner: string;
+	private _pendingComment: string;
 	private _localToDispose: IDisposable[];
 	private _globalToDispose: IDisposable[];
 	private _markdownRenderer: MarkdownRenderer;
 	private _styleElement: HTMLStyleElement;
 	private _error: HTMLElement;
 
-	public get owner(): number {
+	public get owner(): string {
 		return this._owner;
 	}
 	public get commentThread(): modes.CommentThread {
@@ -137,15 +85,19 @@ export class ReviewZoneWidget extends ZoneWidget {
 		private themeService: IThemeService,
 		private commentService: ICommentService,
 		private openerService: IOpenerService,
+		private dialogService: IDialogService,
+		private notificationService: INotificationService,
 		editor: ICodeEditor,
-		owner: number,
+		owner: string,
 		commentThread: modes.CommentThread,
+		pendingComment: string,
 		options: IOptions = {}
 	) {
 		super(editor, options);
 		this._resizeObserver = null;
 		this._owner = owner;
 		this._commentThread = commentThread;
+		this._pendingComment = pendingComment;
 		this._isCollapsed = commentThread.collapsibleState !== modes.CommentThreadCollapsibleState.Expanded;
 		this._globalToDispose = [];
 		this._localToDispose = [];
@@ -169,6 +121,16 @@ export class ReviewZoneWidget extends ZoneWidget {
 
 	public get onDidCreateThread(): Event<ReviewZoneWidget> {
 		return this._onDidCreateThread.event;
+	}
+
+	public getPosition(): IPosition | undefined {
+		let position: IPosition = this.position;
+		if (position) {
+			return position;
+		}
+
+		position = this._commentGlyph.getPosition().position;
+		return position;
 	}
 
 	protected revealLine(lineNumber: number) {
@@ -195,6 +157,18 @@ export class ReviewZoneWidget extends ZoneWidget {
 		this.editor.revealRangeInCenter(this._commentThread.range);
 	}
 
+	public getPendingComment(): string {
+		if (this._commentEditor) {
+			let model = this._commentEditor.getModel();
+
+			if (model && model.getValueLength() > 0) { // checking length is cheap
+				return model.getValue();
+			}
+		}
+
+		return null;
+	}
+
 	protected _fillContainer(container: HTMLElement): void {
 		this.setCssClass('review-widget');
 		this._headElement = <HTMLDivElement>dom.$('.head');
@@ -215,28 +189,22 @@ export class ReviewZoneWidget extends ZoneWidget {
 		this._actionbarWidget = new ActionBar(actionsContainer, {});
 		this._disposables.push(this._actionbarWidget);
 
-		this._toggleAction = new Action('review.expand', nls.localize('label.collapse', "Collapse"), this._isCollapsed ? EXPAND_ACTION_CLASS : COLLAPSE_ACTION_CLASS, true, () => {
-			if (this._isCollapsed) {
-				this.show({ lineNumber: this._commentThread.range.startLineNumber, column: 1 }, 2);
-				this._toggleAction.label = nls.localize('label.collapse', "Collapse");
+		this._collapseAction = new Action('review.expand', nls.localize('label.collapse', "Collapse"), COLLAPSE_ACTION_CLASS, true, () => {
+			if (this._commentThread.comments.length === 0) {
+				this.dispose();
+				return null;
 			}
-			else {
-				if (this._commentThread.comments.length === 0) {
-					this.dispose();
-					return null;
-				}
-				this._isCollapsed = true;
-				this.hide();
-				this._toggleAction.label = nls.localize('label.expand', "Expand");
-			}
+
+			this._isCollapsed = true;
+			this.hide();
 			return null;
 		});
 
-		this._actionbarWidget.push(this._toggleAction, { label: false, icon: true });
+		this._actionbarWidget.push(this._collapseAction, { label: false, icon: true });
 	}
 
 	toggleExpand() {
-		this._toggleAction.run();
+		this._collapseAction.run();
 	}
 
 	update(commentThread: modes.CommentThread) {
@@ -263,7 +231,7 @@ export class ReviewZoneWidget extends ZoneWidget {
 			this._commentsElement.removeChild(commentElementsToDel[i].domNode);
 		}
 
-		let lastCommentElement: HTMLElement = null;
+		let lastCommentElement: HTMLElement | null = null;
 		let newCommentNodeList: CommentNode[] = [];
 		for (let i = newCommentsLen - 1; i >= 0; i--) {
 			let currentComment = commentThread.comments[i];
@@ -272,7 +240,8 @@ export class ReviewZoneWidget extends ZoneWidget {
 				lastCommentElement = oldCommentNode[0].domNode;
 				newCommentNodeList.unshift(oldCommentNode[0]);
 			} else {
-				let newElement = new CommentNode(currentComment, this._markdownRenderer);
+				const newElement = this.createNewCommentNode(currentComment);
+
 				newCommentNodeList.unshift(newElement);
 				if (lastCommentElement) {
 					this._commentsElement.insertBefore(newElement.domNode, lastCommentElement);
@@ -309,7 +278,8 @@ export class ReviewZoneWidget extends ZoneWidget {
 
 		this._commentElements = [];
 		for (let i = 0; i < this._commentThread.comments.length; i++) {
-			let newCommentNode = new CommentNode(this._commentThread.comments[i], this._markdownRenderer);
+			const newCommentNode = this.createNewCommentNode(this._commentThread.comments[i]);
+
 			this._commentElements.push(newCommentNode);
 			this._commentsElement.appendChild(newCommentNode.domNode);
 		}
@@ -319,7 +289,7 @@ export class ReviewZoneWidget extends ZoneWidget {
 		this._commentEditor = this.instantiationService.createInstance(SimpleCommentEditor, this._commentForm, SimpleCommentEditor.getEditorOptions());
 		const modeId = hasExistingComments ? this._commentThread.threadId : ++INMEM_MODEL_ID;
 		const resource = URI.parse(`${COMMENT_SCHEME}:commentinput-${modeId}.md`);
-		const model = this.modelService.createModel('', this.modeService.getOrCreateModeByFilenameOrFirstLine(resource.path), resource, true);
+		const model = this.modelService.createModel(this._pendingComment || '', this.modeService.createByFilepathOrFirstLine(resource.path), resource, true);
 		this._localToDispose.push(model);
 		this._commentEditor.setModel(model);
 		this._localToDispose.push(this._commentEditor);
@@ -364,7 +334,7 @@ export class ReviewZoneWidget extends ZoneWidget {
 		attachButtonStyler(button, this.themeService);
 		button.label = 'Add comment';
 
-		button.enabled = false;
+		button.enabled = model.getValueLength() > 0;
 		this._localToDispose.push(this._commentEditor.onDidChangeModelContent(_ => {
 			if (this._commentEditor.getValue()) {
 				button.enabled = true;
@@ -394,7 +364,50 @@ export class ReviewZoneWidget extends ZoneWidget {
 		// If there are no existing comments, place focus on the text area. This must be done after show, which also moves focus.
 		if (this._commentThread.reply && !this._commentThread.comments.length) {
 			this._commentEditor.focus();
+		} else if (this._commentEditor.getModel().getValueLength() > 0) {
+			if (!dom.hasClass(this._commentForm, 'expand')) {
+				dom.addClass(this._commentForm, 'expand');
+			}
+			this._commentEditor.focus();
 		}
+	}
+
+	private createNewCommentNode(comment: modes.Comment): CommentNode {
+		let newCommentNode = new CommentNode(
+			comment,
+			this.owner,
+			this.editor.getModel().uri,
+			this._markdownRenderer,
+			this.themeService,
+			this.instantiationService,
+			this.commentService,
+			this.modelService,
+			this.modeService,
+			this.dialogService,
+			this.notificationService);
+
+		this._disposables.push(newCommentNode);
+		this._disposables.push(newCommentNode.onDidDelete(deletedNode => {
+			const deletedNodeId = deletedNode.comment.commentId;
+			const deletedElementIndex = arrays.firstIndex(this._commentElements, commentNode => commentNode.comment.commentId === deletedNodeId);
+			if (deletedElementIndex > -1) {
+				this._commentElements.splice(deletedElementIndex, 1);
+			}
+
+			const deletedCommentIndex = arrays.firstIndex(this._commentThread.comments, comment => comment.commentId === deletedNodeId);
+			if (deletedCommentIndex > -1) {
+				this._commentThread.comments.splice(deletedCommentIndex, 1);
+			}
+
+			this._commentsElement.removeChild(deletedNode.domNode);
+			deletedNode.dispose();
+
+			if (this._commentThread.comments.length === 0) {
+				this.dispose();
+			}
+		}));
+
+		return newCommentNode;
 	}
 
 	private async createComment(lineNumber: number): Promise<void> {
@@ -425,6 +438,7 @@ export class ReviewZoneWidget extends ZoneWidget {
 
 			if (newCommentThread) {
 				this._commentEditor.setValue('');
+				this._pendingComment = '';
 				if (dom.hasClass(this._commentForm, 'expand')) {
 					dom.removeClass(this._commentForm, 'expand');
 				}
@@ -459,17 +473,20 @@ export class ReviewZoneWidget extends ZoneWidget {
 		this._headingLabel.setAttribute('aria-label', label);
 	}
 
+	private expandReplyArea() {
+		if (!dom.hasClass(this._commentForm, 'expand')) {
+			dom.addClass(this._commentForm, 'expand');
+			this._commentEditor.focus();
+		}
+	}
+
 	private createReplyButton() {
 		this._reviewThreadReplyButton = <HTMLButtonElement>dom.append(this._commentForm, dom.$('button.review-thread-reply-button'));
 		this._reviewThreadReplyButton.title = nls.localize('reply', "Reply...");
 		this._reviewThreadReplyButton.textContent = nls.localize('reply', "Reply...");
 		// bind click/escape actions for reviewThreadReplyButton and textArea
-		this._reviewThreadReplyButton.onclick = () => {
-			if (!dom.hasClass(this._commentForm, 'expand')) {
-				dom.addClass(this._commentForm, 'expand');
-				this._commentEditor.focus();
-			}
-		};
+		this._localToDispose.push(dom.addDisposableListener(this._reviewThreadReplyButton, 'click', _ => this.expandReplyArea()));
+		this._localToDispose.push(dom.addDisposableListener(this._reviewThreadReplyButton, 'focus', _ => this.expandReplyArea()));
 
 		this._commentEditor.onDidBlurEditorWidget(() => {
 			if (this._commentEditor.getModel().getValueLength() === 0 && dom.hasClass(this._commentForm, 'expand')) {
@@ -590,7 +607,7 @@ export class ReviewZoneWidget extends ZoneWidget {
 	}
 
 	private _applyTheme(theme: ITheme) {
-		let borderColor = theme.getColor(peekViewBorder) || Color.transparent;
+		const borderColor = theme.getColor(peekViewBorder) || Color.transparent;
 		this.style({
 			arrowColor: borderColor,
 			frameColor: borderColor
@@ -599,18 +616,18 @@ export class ReviewZoneWidget extends ZoneWidget {
 		const content: string[] = [];
 		const linkColor = theme.getColor(textLinkForeground);
 		if (linkColor) {
-			content.push(`.monaco-editor .review-widget .body .review-comment a { color: ${linkColor} }`);
+			content.push(`.monaco-editor .review-widget .body .comment-body a { color: ${linkColor} }`);
 		}
 
 		const linkActiveColor = theme.getColor(textLinkActiveForeground);
 		if (linkActiveColor) {
-			content.push(`.monaco-editor .review-widget .body .review-comment a:hover, a:active { color: ${linkActiveColor} }`);
+			content.push(`.monaco-editor .review-widget .body .comment-body a:hover, a:active { color: ${linkActiveColor} }`);
 		}
 
 		const focusColor = theme.getColor(focusBorder);
 		if (focusColor) {
-			content.push(`.monaco-editor .review-widget .body .review-comment a:focus { outline: 1px solid ${focusColor}; }`);
-			content.push(`.monaco-editor .review-widget .body .comment-form .monaco-editor.focused { outline: 1px solid ${focusColor}; }`);
+			content.push(`.monaco-editor .review-widget .body .comment-body a:focus { outline: 1px solid ${focusColor}; }`);
+			content.push(`.monaco-editor .review-widget .body .monaco-editor.focused { outline: 1px solid ${focusColor}; }`);
 		}
 
 		const blockQuoteBackground = theme.getColor(textBlockQuoteBackground);
@@ -626,17 +643,17 @@ export class ReviewZoneWidget extends ZoneWidget {
 		const hcBorder = theme.getColor(contrastBorder);
 		if (hcBorder) {
 			content.push(`.monaco-editor .review-widget .body .comment-form .review-thread-reply-button { outline-color: ${hcBorder}; }`);
-			content.push(`.monaco-editor .review-widget .body .comment-form .monaco-editor { outline: 1px solid ${hcBorder}; }`);
+			content.push(`.monaco-editor .review-widget .body .monaco-editor { outline: 1px solid ${hcBorder}; }`);
 		}
 
 		const errorBorder = theme.getColor(inputValidationErrorBorder);
 		if (errorBorder) {
-			content.push(`.monaco-editor .review-widget .body .comment-form .validation-error { border: 1px solid ${errorBorder}; }`);
+			content.push(`.monaco-editor .review-widget .validation-error { border: 1px solid ${errorBorder}; }`);
 		}
 
 		const errorBackground = theme.getColor(inputValidationErrorBackground);
 		if (errorBackground) {
-			content.push(`.monaco-editor .review-widget .body .comment-form .validation-error { background: ${errorBackground}; }`);
+			content.push(`.monaco-editor .review-widget .validation-error { background: ${errorBackground}; }`);
 		}
 
 		const errorForeground = theme.getColor(inputValidationErrorForeground);

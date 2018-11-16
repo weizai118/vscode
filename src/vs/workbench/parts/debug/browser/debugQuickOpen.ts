@@ -5,7 +5,6 @@
 
 import * as nls from 'vs/nls';
 import * as Filters from 'vs/base/common/filters';
-import { TPromise } from 'vs/base/common/winjs.base';
 import * as Quickopen from 'vs/workbench/browser/quickopen';
 import * as QuickOpen from 'vs/base/parts/quickopen/common/quickOpen';
 import * as Model from 'vs/base/parts/quickopen/browser/quickOpenModel';
@@ -14,6 +13,7 @@ import { IWorkspaceContextService, WorkbenchState } from 'vs/platform/workspace/
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { StartAction } from 'vs/workbench/parts/debug/browser/debugActions';
 import { INotificationService } from 'vs/platform/notification/common/notification';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 class AddConfigEntry extends Model.QuickOpenEntry {
 
@@ -76,6 +76,7 @@ class StartDebugEntry extends Model.QuickOpenEntry {
 export class DebugQuickOpenHandler extends Quickopen.QuickOpenHandler {
 
 	public static readonly ID = 'workbench.picker.launch';
+
 	private autoFocusIndex: number;
 
 	constructor(
@@ -91,7 +92,7 @@ export class DebugQuickOpenHandler extends Quickopen.QuickOpenHandler {
 		return nls.localize('debugAriaLabel', "Type a name of a launch configuration to run.");
 	}
 
-	public getResults(input: string): TPromise<Model.QuickOpenModel> {
+	public getResults(input: string, token: CancellationToken): Promise<Model.QuickOpenModel> {
 		const configurations: Model.QuickOpenEntry[] = [];
 
 		const configManager = this.debugService.getConfigurationManager();
@@ -118,7 +119,7 @@ export class DebugQuickOpenHandler extends Quickopen.QuickOpenHandler {
 
 		});
 
-		return TPromise.as(new Model.QuickOpenModel(configurations));
+		return Promise.resolve(new Model.QuickOpenModel(configurations));
 	}
 
 	public getAutoFocus(input: string): QuickOpen.IAutoFocus {

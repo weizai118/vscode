@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import 'vs/css!./quickInput';
 import { Component } from 'vs/workbench/common/component';
 import { IQuickInputService, IQuickPickItem, IPickOptions, IInputOptions, IQuickNavigateConfiguration, IQuickPick, IQuickInput, IQuickInputButton, IInputBox, IQuickPickItemButtonEvent, QuickPickInput, IQuickPickSeparator, IKeyMods } from 'vs/platform/quickinput/common/quickInput';
@@ -15,7 +13,6 @@ import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { contrastBorder, widgetShadow } from 'vs/platform/theme/common/colorRegistry';
 import { SIDE_BAR_BACKGROUND, SIDE_BAR_FOREGROUND } from 'vs/workbench/common/theme';
 import { IQuickOpenService } from 'vs/platform/quickOpen/common/quickOpen';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { QuickInputList } from './quickInputList';
 import { QuickInputBox } from './quickInputBox';
@@ -46,6 +43,7 @@ import { getIconClass } from 'vs/workbench/browser/parts/quickinput/quickInputUt
 import { AccessibilitySupport } from 'vs/base/common/platform';
 import * as browser from 'vs/base/browser/browser';
 import { IEditorOptions } from 'vs/editor/common/config/editorOptions';
+import { IStorageService } from 'vs/platform/storage/common/storage';
 
 const $ = dom.$;
 
@@ -302,6 +300,8 @@ class QuickInput implements IQuickInput {
 
 class QuickPick<T extends IQuickPickItem> extends QuickInput implements IQuickPick<T> {
 
+	private static INPUT_BOX_ARIA_LABEL = localize('quickInputBox.ariaLabel', "Type to narrow down results.");
+
 	private _value = '';
 	private _placeholder;
 	private onDidChangeValueEmitter = new Emitter<string>();
@@ -506,7 +506,9 @@ class QuickPick<T extends IQuickPickItem> extends QuickInput implements IQuickPi
 					}
 					this._selectedItems = selectedItems as T[];
 					this.onDidChangeSelectionEmitter.fire(selectedItems as T[]);
-					this.onDidAcceptEmitter.fire();
+					if (selectedItems.length) {
+						this.onDidAcceptEmitter.fire();
+					}
 				}),
 				this.ui.list.onChangedCheckedElements(checkedItems => {
 					if (!this.canSelectMany) {
@@ -595,7 +597,7 @@ class QuickPick<T extends IQuickPickItem> extends QuickInput implements IQuickPi
 				this.ui.list.focus('First');
 			}
 		}
-		if (this.ui.container.classList.contains('show-checkboxes') !== this.canSelectMany) {
+		if (this.ui.container.classList.contains('show-checkboxes') !== !!this.canSelectMany) {
 			if (this.canSelectMany) {
 				this.ui.list.clearFocus();
 			} else if (!this.ui.isScreenReaderOptimized()) {
@@ -625,6 +627,7 @@ class QuickPick<T extends IQuickPickItem> extends QuickInput implements IQuickPi
 		this.ui.list.matchOnDescription = this.matchOnDescription;
 		this.ui.list.matchOnDetail = this.matchOnDetail;
 		this.ui.setComboboxAccessibility(true);
+		this.ui.inputBox.setAttribute('aria-label', QuickPick.INPUT_BOX_ARIA_LABEL);
 		this.ui.setVisibilities(this.canSelectMany ? { title: !!this.title || !!this.step, checkAll: true, inputBox: true, visibleCount: true, count: true, ok: true, list: true } : { title: !!this.title || !!this.step, inputBox: true, visibleCount: true, list: true });
 	}
 }
@@ -780,6 +783,7 @@ export class QuickInputService extends Component implements IQuickInputService {
 	private contexts: { [id: string]: IContextKey<boolean>; } = Object.create(null);
 	private onDidAcceptEmitter = this._register(new Emitter<void>());
 	private onDidTriggerButtonEmitter = this._register(new Emitter<IQuickInputButton>());
+	private keyMods: Writeable<IKeyMods> = { ctrlCmd: false, alt: false };
 
 	private controller: QuickInput;
 
@@ -792,12 +796,14 @@ export class QuickInputService extends Component implements IQuickInputService {
 		@IEditorGroupsService private editorGroupService: IEditorGroupsService,
 		@IKeybindingService private keybindingService: IKeybindingService,
 		@IContextKeyService private contextKeyService: IContextKeyService,
-		@IThemeService themeService: IThemeService
+		@IThemeService themeService: IThemeService,
+		@IStorageService storageService: IStorageService
 	) {
-		super(QuickInputService.ID, themeService);
+		super(QuickInputService.ID, themeService, storageService);
 		this.inQuickOpenContext = new RawContextKey<boolean>('inQuickOpen', false).bindTo(contextKeyService);
 		this._register(this.quickOpenService.onShow(() => this.inQuickOpen('quickOpen', true)));
 		this._register(this.quickOpenService.onHide(() => this.inQuickOpen('quickOpen', false)));
+		this.registerKeyModsListeners();
 	}
 
 	private inQuickOpen(widget: 'quickInput' | 'quickOpen', open: boolean) {
@@ -847,6 +853,34 @@ export class QuickInputService extends Component implements IQuickInputService {
 		}
 	}
 
+	private registerKeyModsListeners() {
+		const workbench = this.partService.getWorkbenchElement();
+		this._register(dom.addDisposableListener(workbench, dom.EventType.KEY_DOWN, (e: KeyboardEvent) => {
+			const event = new StandardKeyboardEvent(e);
+			switch (event.keyCode) {
+				case KeyCode.Ctrl:
+				case KeyCode.Meta:
+					this.keyMods.ctrlCmd = true;
+					break;
+				case KeyCode.Alt:
+					this.keyMods.alt = true;
+					break;
+			}
+		}));
+		this._register(dom.addDisposableListener(workbench, dom.EventType.KEY_UP, (e: KeyboardEvent) => {
+			const event = new StandardKeyboardEvent(e);
+			switch (event.keyCode) {
+				case KeyCode.Ctrl:
+				case KeyCode.Meta:
+					this.keyMods.ctrlCmd = false;
+					break;
+				case KeyCode.Alt:
+					this.keyMods.alt = false;
+					break;
+			}
+		}));
+	}
+
 	private create() {
 		if (this.ui) {
 			return;
@@ -884,6 +918,7 @@ export class QuickInputService extends Component implements IQuickInputService {
 		this.filterContainer = dom.append(headerContainer, $('.quick-input-filter'));
 
 		const inputBox = this._register(new QuickInputBox(this.filterContainer));
+		inputBox.setAttribute('aria-describedby', `${this.idPrefix}message`);
 
 		this.visibleCountContainer = dom.append(this.filterContainer, $('.quick-input-visible-count'));
 		this.visibleCountContainer.setAttribute('aria-live', 'polite');
@@ -903,7 +938,7 @@ export class QuickInputService extends Component implements IQuickInputService {
 			this.onDidAcceptEmitter.fire();
 		}));
 
-		const message = dom.append(container, $('.quick-input-message'));
+		const message = dom.append(container, $(`#${this.idPrefix}message.quick-input-message`));
 
 		const progressBar = new ProgressBar(container);
 		dom.addClass(progressBar.getContainer(), 'quick-input-progress');
@@ -975,30 +1010,6 @@ export class QuickInputService extends Component implements IQuickInputService {
 					break;
 			}
 		}));
-		this._register(dom.addDisposableListener(container, dom.EventType.KEY_DOWN, (e: KeyboardEvent) => {
-			const event = new StandardKeyboardEvent(e);
-			switch (event.keyCode) {
-				case KeyCode.Ctrl:
-				case KeyCode.Meta:
-					this.ui.keyMods.ctrlCmd = true;
-					break;
-				case KeyCode.Alt:
-					this.ui.keyMods.alt = true;
-					break;
-			}
-		}));
-		this._register(dom.addDisposableListener(container, dom.EventType.KEY_UP, (e: KeyboardEvent) => {
-			const event = new StandardKeyboardEvent(e);
-			switch (event.keyCode) {
-				case KeyCode.Ctrl:
-				case KeyCode.Meta:
-					this.ui.keyMods.ctrlCmd = false;
-					break;
-				case KeyCode.Alt:
-					this.ui.keyMods.alt = false;
-					break;
-			}
-		}));
 
 		this._register(this.quickOpenService.onShow(() => this.hide(true)));
 
@@ -1017,7 +1028,7 @@ export class QuickInputService extends Component implements IQuickInputService {
 			onDidAccept: this.onDidAcceptEmitter.event,
 			onDidTriggerButton: this.onDidTriggerButtonEmitter.event,
 			ignoreFocusOut: false,
-			keyMods: { ctrlCmd: false, alt: false },
+			keyMods: this.keyMods,
 			isScreenReaderOptimized: () => this.isScreenReaderOptimized(),
 			show: controller => this.show(controller),
 			hide: () => this.hide(),
@@ -1029,8 +1040,8 @@ export class QuickInputService extends Component implements IQuickInputService {
 		this.updateStyles();
 	}
 
-	pick<T extends IQuickPickItem, O extends IPickOptions<T>>(picks: TPromise<QuickPickInput<T>[]> | QuickPickInput<T>[], options: O = <O>{}, token: CancellationToken = CancellationToken.None): TPromise<O extends { canPickMany: true } ? T[] : T> {
-		return new TPromise<O extends { canPickMany: true } ? T[] : T>((doResolve, reject) => {
+	pick<T extends IQuickPickItem, O extends IPickOptions<T>>(picks: Promise<QuickPickInput<T>[]> | QuickPickInput<T>[], options: O = <O>{}, token: CancellationToken = CancellationToken.None): Promise<O extends { canPickMany: true } ? T[] : T> {
+		return new Promise<O extends { canPickMany: true } ? T[] : T>((doResolve, reject) => {
 			let resolve = (result: any) => {
 				resolve = doResolve;
 				if (options.onKeyMods) {
@@ -1105,7 +1116,7 @@ export class QuickInputService extends Component implements IQuickInputService {
 			input.quickNavigate = options.quickNavigate;
 			input.contextKey = options.contextKey;
 			input.busy = true;
-			TPromise.join([picks, options.activeItem])
+			Promise.all([picks, options.activeItem])
 				.then(([items, _activeItem]) => {
 					activeItem = _activeItem;
 					input.busy = false;
@@ -1118,29 +1129,29 @@ export class QuickInputService extends Component implements IQuickInputService {
 					}
 				});
 			input.show();
-			TPromise.wrap(picks).then(null, err => {
+			Promise.resolve(picks).then(null, err => {
 				reject(err);
 				input.hide();
 			});
 		});
 	}
 
-	input(options: IInputOptions = {}, token: CancellationToken = CancellationToken.None): TPromise<string> {
-		return new TPromise<string>((resolve, reject) => {
+	input(options: IInputOptions = {}, token: CancellationToken = CancellationToken.None): Promise<string> {
+		return new Promise<string>((resolve, reject) => {
 			if (token.isCancellationRequested) {
 				resolve(undefined);
 				return;
 			}
 			const input = this.createInputBox();
-			const validateInput = options.validateInput || (() => TPromise.as(undefined));
+			const validateInput = options.validateInput || (() => <Thenable<undefined>>Promise.resolve(undefined));
 			const onDidValueChange = debounceEvent(input.onDidChangeValue, (last, cur) => cur, 100);
 			let validationValue = options.value || '';
-			let validation = TPromise.wrap(validateInput(validationValue));
+			let validation = Promise.resolve(validateInput(validationValue));
 			const disposables = [
 				input,
 				onDidValueChange(value => {
 					if (value !== validationValue) {
-						validation = TPromise.wrap(validateInput(value));
+						validation = Promise.resolve(validateInput(value));
 						validationValue = value;
 					}
 					validation.then(result => {
@@ -1152,7 +1163,7 @@ export class QuickInputService extends Component implements IQuickInputService {
 				input.onDidAccept(() => {
 					const value = input.value;
 					if (value !== validationValue) {
-						validation = TPromise.wrap(validateInput(value));
+						validation = Promise.resolve(validateInput(value));
 						validationValue = value;
 					}
 					validation.then(result => {
@@ -1220,9 +1231,8 @@ export class QuickInputService extends Component implements IQuickInputService {
 		this.ui.list.matchOnDescription = false;
 		this.ui.list.matchOnDetail = false;
 		this.ui.ignoreFocusOut = false;
-		this.ui.keyMods.ctrlCmd = false;
-		this.ui.keyMods.alt = false;
 		this.setComboboxAccessibility(false);
+		this.ui.inputBox.removeAttribute('aria-label');
 
 		const keybinding = this.keybindingService.lookupKeybinding(BackAction.ID);
 		backButton.tooltip = keybinding ? localize('quickInput.backWithKeybinding', "Back ({0})", keybinding.getLabel()) : localize('quickInput.back', "Back");
@@ -1324,17 +1334,17 @@ export class QuickInputService extends Component implements IQuickInputService {
 
 	accept() {
 		this.onDidAcceptEmitter.fire();
-		return TPromise.as(undefined);
+		return Promise.resolve(undefined);
 	}
 
 	back() {
 		this.onDidTriggerButtonEmitter.fire(this.backButton);
-		return TPromise.as(undefined);
+		return Promise.resolve(undefined);
 	}
 
 	cancel() {
 		this.hide();
-		return TPromise.as(undefined);
+		return Promise.resolve(undefined);
 	}
 
 	layout(dimension: dom.Dimension): void {
@@ -1362,16 +1372,16 @@ export class QuickInputService extends Component implements IQuickInputService {
 		if (this.ui) {
 			// TODO
 			const titleColor = { dark: 'rgba(255, 255, 255, 0.105)', light: 'rgba(0,0,0,.06)', hc: 'black' }[theme.type];
-			this.titleBar.style.backgroundColor = titleColor ? titleColor.toString() : undefined;
+			this.titleBar.style.backgroundColor = titleColor ? titleColor.toString() : null;
 			this.ui.inputBox.style(theme);
 			const sideBarBackground = theme.getColor(SIDE_BAR_BACKGROUND);
-			this.ui.container.style.backgroundColor = sideBarBackground ? sideBarBackground.toString() : undefined;
+			this.ui.container.style.backgroundColor = sideBarBackground ? sideBarBackground.toString() : null;
 			const sideBarForeground = theme.getColor(SIDE_BAR_FOREGROUND);
-			this.ui.container.style.color = sideBarForeground ? sideBarForeground.toString() : undefined;
+			this.ui.container.style.color = sideBarForeground ? sideBarForeground.toString() : null;
 			const contrastBorderColor = theme.getColor(contrastBorder);
-			this.ui.container.style.border = contrastBorderColor ? `1px solid ${contrastBorderColor}` : undefined;
+			this.ui.container.style.border = contrastBorderColor ? `1px solid ${contrastBorderColor}` : null;
 			const widgetShadowColor = theme.getColor(widgetShadow);
-			this.ui.container.style.boxShadow = widgetShadowColor ? `0 5px 8px ${widgetShadowColor}` : undefined;
+			this.ui.container.style.boxShadow = widgetShadowColor ? `0 5px 8px ${widgetShadowColor}` : null;
 		}
 	}
 
@@ -1400,8 +1410,8 @@ export class BackAction extends Action {
 		super(id, label);
 	}
 
-	public run(): TPromise<any> {
+	public run(): Promise<any> {
 		this.quickInputService.back();
-		return TPromise.as(null);
+		return Promise.resolve(null);
 	}
 }

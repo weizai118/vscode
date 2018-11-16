@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as nls from 'vs/nls';
 import { Action, IAction } from 'vs/base/common/actions';
 import { illegalArgument } from 'vs/base/common/errors';
@@ -15,28 +13,28 @@ import { IStorageService, StorageScope } from 'vs/platform/storage/common/storag
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ActionBar, ActionsOrientation, Separator } from 'vs/base/browser/ui/actionbar/actionbar';
 import { CompositeActionItem, CompositeOverflowActivityAction, ICompositeActivity, CompositeOverflowActivityActionItem, ActivityAction, ICompositeBar, ICompositeBarColors, DraggedCompositeIdentifier } from 'vs/workbench/browser/parts/compositeBarActions';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { Dimension, $, addDisposableListener, EventType, EventHelper } from 'vs/base/browser/dom';
 import { StandardMouseEvent } from 'vs/base/browser/mouseEvent';
 import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 import { Widget } from 'vs/base/browser/ui/widget';
 import { isUndefinedOrNull } from 'vs/base/common/types';
 import { LocalSelectionTransfer } from 'vs/workbench/browser/dnd';
+import { ITheme } from 'vs/platform/theme/common/themeService';
 
 export interface ICompositeBarOptions {
 	icon: boolean;
 	storageId: string;
 	orientation: ActionsOrientation;
-	colors: ICompositeBarColors;
+	colors: (theme: ITheme) => ICompositeBarColors;
 	compositeSize: number;
 	overflowActionSize: number;
 	getActivityAction: (compositeId: string) => ActivityAction;
 	getCompositePinnedAction: (compositeId: string) => Action;
 	getOnCompositeClickAction: (compositeId: string) => Action;
 	getContextMenuActions: () => Action[];
-	openComposite: (compositeId: string) => TPromise<any>;
+	openComposite: (compositeId: string) => Thenable<any>;
 	getDefaultCompositeId: () => string;
-	hidePart: () => TPromise<any>;
+	hidePart: () => void;
 }
 
 export class CompositeBar extends Widget implements ICompositeBar {
@@ -68,7 +66,11 @@ export class CompositeBar extends Widget implements ICompositeBar {
 	}
 
 	getComposites(): ICompositeBarItem[] {
-		return this.model.items;
+		return [...this.model.items];
+	}
+
+	getPinnedComposites(): ICompositeBarItem[] {
+		return this.model.pinnedItems;
 	}
 
 	create(parent: HTMLElement): HTMLElement {
@@ -398,7 +400,7 @@ export class CompositeBar extends Widget implements ICompositeBar {
 		const event = new StandardMouseEvent(e);
 		this.contextMenuService.showContextMenu({
 			getAnchor: () => { return { x: event.posx, y: event.posy }; },
-			getActions: () => TPromise.as(this.getContextMenuActions())
+			getActions: () => this.getContextMenuActions()
 		});
 	}
 
@@ -457,6 +459,10 @@ class CompositeBarModel {
 
 	get visibleItems(): ICompositeBarItem[] {
 		return this.items.filter(item => item.visible);
+	}
+
+	get pinnedItems(): ICompositeBarItem[] {
+		return this.items.filter(item => item.visible && item.pinned);
 	}
 
 	private createCompositeBarItem(id: string, name: string, order: number, pinned: boolean, visible: boolean): ICompositeBarItem {

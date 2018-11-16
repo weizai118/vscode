@@ -2,16 +2,16 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as nls from 'vs/nls';
 import * as Objects from 'vs/base/common/objects';
-import { IJSONSchema } from 'vs/base/common/jsonSchema';
+import { IJSONSchema, IJSONSchemaMap } from 'vs/base/common/jsonSchema';
 
 import commonSchema from './jsonSchemaCommon';
 
 import { ProblemMatcherRegistry } from 'vs/workbench/parts/tasks/common/problemMatcher';
 import { TaskDefinitionRegistry } from '../common/taskDefinitionRegistry';
+import * as ConfigurationResolverUtils from 'vs/workbench/services/configurationResolver/common/configurationResolverUtils';
 
 function fixReferences(literal: any) {
 	if (Array.isArray(literal)) {
@@ -83,7 +83,8 @@ const presentation: IJSONSchema = {
 		reveal: 'always',
 		focus: false,
 		panel: 'shared',
-		showReuseMessage: true
+		showReuseMessage: true,
+		clear: false,
 	},
 	description: nls.localize('JsonSchema.tasks.presentation', 'Configures the panel that is used to present the task\'s ouput and reads its input.'),
 	additionalProperties: false,
@@ -119,6 +120,11 @@ const presentation: IJSONSchema = {
 			type: 'boolean',
 			default: true,
 			description: nls.localize('JsonSchema.tasks.presentation.showReuseMessage', 'Controls whether to show the `Terminal will be reused by tasks, press any key to close it` message.')
+		},
+		clear: {
+			type: 'boolean',
+			default: false,
+			description: nls.localize('JsonSchema.tasks.presentation.clear', 'Controls whether the terminal is cleared before executing the task.')
 		}
 	}
 };
@@ -272,7 +278,7 @@ const version: IJSONSchema = {
 const identifier: IJSONSchema = {
 	type: 'string',
 	description: nls.localize('JsonSchema.tasks.identifier', 'A user defined identifier to reference the task in launch.json or a dependsOn clause.'),
-	deprecationMessage: nls.localize('JsonSchema.tasks.identifier.deprecated', 'User defined identifiers are deprecated. For custom task used the name as a reference and for tasks provided by extensions use their defined task identifier.')
+	deprecationMessage: nls.localize('JsonSchema.tasks.identifier.deprecated', 'User defined identifiers are deprecated. For custom task use the name as a reference and for tasks provided by extensions use their defined task identifier.')
 };
 
 const options: IJSONSchema = Objects.deepClone(commonSchema.definitions.options);
@@ -453,10 +459,21 @@ const schema: IJSONSchema = {
 
 schema.definitions = definitions;
 
+function deprecatedVariableMessage(schemaMap: IJSONSchemaMap, property: string) {
+	if (schemaMap[property].properties) {
+		Object.keys(schemaMap[property].properties).forEach(name => {
+			deprecatedVariableMessage(schemaMap[property].properties, name);
+		});
+	} else {
+		ConfigurationResolverUtils.applyDeprecatedVariableMessage(schemaMap[property]);
+	}
+}
+
 Object.getOwnPropertyNames(definitions).forEach(key => {
 	let newKey = key + '2';
 	definitions[newKey] = definitions[key];
 	delete definitions[key];
+	deprecatedVariableMessage(definitions, newKey);
 });
 fixReferences(schema);
 

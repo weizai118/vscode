@@ -3,22 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import { TPromise } from 'vs/base/common/winjs.base';
-import { IChannel } from 'vs/base/parts/ipc/node/ipc';
+import { IChannel, IServerChannel } from 'vs/base/parts/ipc/node/ipc';
 import { Event, buffer } from 'vs/base/common/event';
 import { ILocalizationsService, LanguageType } from 'vs/platform/localizations/common/localizations';
 
-export interface ILocalizationsChannel extends IChannel {
-	listen(event: 'onDidLanguagesChange'): Event<void>;
-	listen<T>(event: string, arg?: any): Event<T>;
-
-	call(command: 'getLanguageIds'): TPromise<string[]>;
-	call(command: string, arg?: any): TPromise<any>;
-}
-
-export class LocalizationsChannel implements ILocalizationsChannel {
+export class LocalizationsChannel implements IServerChannel {
 
 	onDidLanguagesChange: Event<void>;
 
@@ -26,19 +15,20 @@ export class LocalizationsChannel implements ILocalizationsChannel {
 		this.onDidLanguagesChange = buffer(service.onDidLanguagesChange, true);
 	}
 
-	listen<T>(event: string): Event<any> {
+	listen(_, event: string): Event<any> {
 		switch (event) {
 			case 'onDidLanguagesChange': return this.onDidLanguagesChange;
 		}
 
-		throw new Error('No event found');
+		throw new Error(`Event not found: ${event}`);
 	}
 
-	call(command: string, arg?: any): TPromise<any> {
+	call(_, command: string, arg?: any): Thenable<any> {
 		switch (command) {
 			case 'getLanguageIds': return this.service.getLanguageIds(arg);
 		}
-		return undefined;
+
+		throw new Error(`Call not found: ${command}`);
 	}
 }
 
@@ -46,11 +36,11 @@ export class LocalizationsChannelClient implements ILocalizationsService {
 
 	_serviceBrand: any;
 
-	constructor(private channel: ILocalizationsChannel) { }
+	constructor(private channel: IChannel) { }
 
 	get onDidLanguagesChange(): Event<void> { return this.channel.listen('onDidLanguagesChange'); }
 
-	getLanguageIds(type?: LanguageType): TPromise<string[]> {
+	getLanguageIds(type?: LanguageType): Thenable<string[]> {
 		return this.channel.call('getLanguageIds', type);
 	}
 }

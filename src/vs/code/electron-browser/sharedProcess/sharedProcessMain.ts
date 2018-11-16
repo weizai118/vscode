@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as fs from 'fs';
 import * as platform from 'vs/base/common/platform';
 import product from 'vs/platform/node/product';
@@ -43,8 +41,12 @@ import { LocalizationsChannel } from 'vs/platform/localizations/node/localizatio
 import { DialogChannelClient } from 'vs/platform/dialogs/node/dialogIpc';
 import { IDialogService } from 'vs/platform/dialogs/common/dialogs';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
+import { DownloadService } from 'vs/platform/download/node/downloadService';
 import { IDownloadService } from 'vs/platform/download/common/download';
-import { DownloadServiceChannelClient } from 'vs/platform/download/node/downloadIpc';
+import { RemoteAuthorityResolverService } from 'vs/platform/remote/node/remoteAuthorityResolverService';
+import { IRemoteAuthorityResolverService } from 'vs/platform/remote/common/remoteAuthorityResolver';
+import { RemoteAuthorityResolverChannel } from 'vs/platform/remote/node/remoteAuthorityResolverChannel';
+import { StaticRouter } from 'vs/base/parts/ipc/node/ipc';
 import { DefaultURITransformer } from 'vs/base/common/uriIpc';
 
 export interface ISharedProcessConfiguration {
@@ -65,12 +67,19 @@ const eventPrefix = 'monacoworkbench';
 
 function main(server: Server, initData: ISharedProcessInitData, configuration: ISharedProcessConfiguration): void {
 	const services = new ServiceCollection();
+
 	const disposables: IDisposable[] = [];
-	process.once('exit', () => dispose(disposables));
+
+	const onExit = () => dispose(disposables);
+	process.once('exit', onExit);
+	ipcRenderer.once('handshake:goodbye', onExit);
+
+	disposables.push(server);
 
 	const environmentService = new EnvironmentService(initData.args, process.execPath);
-	const mainRoute = () => TPromise.as('main');
-	const logLevelClient = new LogLevelSetterChannelClient(server.getChannel('loglevel', { routeCall: mainRoute, routeEvent: mainRoute }));
+
+	const mainRouter = new StaticRouter(ctx => ctx === 'main');
+	const logLevelClient = new LogLevelSetterChannelClient(server.getChannel('loglevel', mainRouter));
 	const logService = new FollowerLogService(logLevelClient, createSpdLogService('sharedprocess', initData.logLevel, environmentService.logsPath));
 	disposables.push(logService);
 
@@ -80,19 +89,16 @@ function main(server: Server, initData: ISharedProcessInitData, configuration: I
 	services.set(ILogService, logService);
 	services.set(IConfigurationService, new SyncDescriptor(ConfigurationService));
 	services.set(IRequestService, new SyncDescriptor(RequestService));
+	services.set(IDownloadService, new SyncDescriptor(DownloadService));
 
-	const windowsChannel = server.getChannel('windows', { routeCall: mainRoute, routeEvent: mainRoute });
+	const windowsChannel = server.getChannel('windows', mainRouter);
 	const windowsService = new WindowsChannelClient(windowsChannel);
 	services.set(IWindowsService, windowsService);
 
 	const activeWindowManager = new ActiveWindowManager(windowsService);
-	const route = () => activeWindowManager.getActiveClientId();
-
-	const dialogChannel = server.getChannel('dialog', { routeCall: route, routeEvent: route });
+	const activeWindowRouter = new StaticRouter(ctx => activeWindowManager.getActiveClientId().then(id => ctx === id));
+	const dialogChannel = server.getChannel('dialog', activeWindowRouter);
 	services.set(IDialogService, new DialogChannelClient(dialogChannel));
-
-	const downloadChannel = server.getChannel('download', { routeCall: route, routeEvent: route });
-	services.set(IDownloadService, new DownloadServiceChannelClient(downloadChannel, DefaultURITransformer));
 
 	const instantiationService = new InstantiationService(services);
 
@@ -101,35 +107,42 @@ function main(server: Server, initData: ISharedProcessInitData, configuration: I
 		const environmentService = accessor.get(IEnvironmentService);
 		const { appRoot, extensionsPath, extensionDevelopmentLocationURI, isBuilt, installSourcePath } = environmentService;
 		const telemetryLogService = new FollowerLogService(logLevelClient, createSpdLogService('telemetry', initData.logLevel, environmentService.logsPath));
+		telemetryLogService.info('The below are logs for every telemetry event sent from VS Code once the log level is set to trace.');
+		telemetryLogService.info('===========================================================');
 
-		let appInsightsAppender: ITelemetryAppender = NullAppender;
-		if (product.aiConfig && product.aiConfig.asimovKey && isBuilt) {
-			appInsightsAppender = new AppInsightsAppender(eventPrefix, null, product.aiConfig.asimovKey, telemetryLogService);
-			disposables.push(appInsightsAppender); // Ensure the AI appender is disposed so that it flushes remaining data
-		}
-		server.registerChannel('telemetryAppender', new TelemetryAppenderChannel(appInsightsAppender));
-
+		let appInsightsAppender: ITelemetryAppender | null = NullAppender;
 		if (!extensionDevelopmentLocationURI && !environmentService.args['disable-telemetry'] && product.enableTelemetry) {
+			if (product.aiConfig && product.aiConfig.asimovKey && isBuilt) {
+				appInsightsAppender = new AppInsightsAppender(eventPrefix, null, product.aiConfig.asimovKey, telemetryLogService);
+				disposables.push(appInsightsAppender); // Ensure the AI appender is disposed so that it flushes remaining data
+			}
 			const config: ITelemetryServiceConfig = {
 				appender: combinedAppender(appInsightsAppender, new LogAppender(logService)),
 				commonProperties: resolveCommonProperties(product.commit, pkg.version, configuration.machineId, installSourcePath),
 				piiPaths: [appRoot, extensionsPath]
 			};
 
-			services.set(ITelemetryService, new SyncDescriptor(TelemetryService, config));
+			services.set(ITelemetryService, new SyncDescriptor(TelemetryService, [config]));
 		} else {
 			services.set(ITelemetryService, NullTelemetryService);
 		}
+		server.registerChannel('telemetryAppender', new TelemetryAppenderChannel(appInsightsAppender));
 
 		services.set(IExtensionManagementService, new SyncDescriptor(ExtensionManagementService));
 		services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryService));
 		services.set(ILocalizationsService, new SyncDescriptor(LocalizationsService));
+		services.set(IRemoteAuthorityResolverService, new SyncDescriptor(RemoteAuthorityResolverService));
 
 		const instantiationService2 = instantiationService.createChild(services);
 
 		instantiationService2.invokeFunction(accessor => {
+
+			const remoteAuthorityResolverService = accessor.get(IRemoteAuthorityResolverService);
+			const remoteAuthorityResolverChannel = new RemoteAuthorityResolverChannel(remoteAuthorityResolverService);
+			server.registerChannel('remoteAuthorityResolver', remoteAuthorityResolverChannel);
+
 			const extensionManagementService = accessor.get(IExtensionManagementService);
-			const channel = new ExtensionManagementChannel(extensionManagementService);
+			const channel = new ExtensionManagementChannel(extensionManagementService, () => DefaultURITransformer);
 			server.registerChannel('extensions', channel);
 
 			// clean up deprecated extensions
@@ -141,15 +154,16 @@ function main(server: Server, initData: ISharedProcessInitData, configuration: I
 
 			createSharedProcessContributions(instantiationService2);
 			disposables.push(extensionManagementService as ExtensionManagementService);
+			disposables.push(remoteAuthorityResolverService as RemoteAuthorityResolverService);
 		});
 	});
 }
 
-function setupIPC(hook: string): TPromise<Server> {
-	function setup(retry: boolean): TPromise<Server> {
+function setupIPC(hook: string): Thenable<Server> {
+	function setup(retry: boolean): Thenable<Server> {
 		return serve(hook).then(null, err => {
 			if (!retry || platform.isWindows || err.code !== 'EADDRINUSE') {
-				return TPromise.wrapError(err);
+				return Promise.reject(err);
 			}
 
 			// should retry, not windows and eaddrinuse
@@ -158,7 +172,7 @@ function setupIPC(hook: string): TPromise<Server> {
 				client => {
 					// we could connect to a running instance. this is not good, abort
 					client.dispose();
-					return TPromise.wrapError(new Error('There is an instance already running.'));
+					return Promise.reject(new Error('There is an instance already running.'));
 				},
 				err => {
 					// it happens on Linux and OS X that the pipe is left behind
@@ -167,7 +181,7 @@ function setupIPC(hook: string): TPromise<Server> {
 					try {
 						fs.unlinkSync(hook);
 					} catch (e) {
-						return TPromise.wrapError(new Error('Error deleting the shared ipc hook.'));
+						return Promise.reject(new Error('Error deleting the shared ipc hook.'));
 					}
 
 					return setup(false);

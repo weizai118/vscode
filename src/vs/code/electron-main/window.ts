@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as path from 'path';
 import * as objects from 'vs/base/common/objects';
 import * as nls from 'vs/nls';
@@ -58,6 +56,8 @@ export class CodeWindow implements ICodeWindow {
 
 	private static readonly MIN_WIDTH = 200;
 	private static readonly MIN_HEIGHT = 120;
+
+	private static readonly MAX_URL_LENGTH = 2 * 1024 * 1024; // https://cs.chromium.org/chromium/src/url/url_constants.cc?l=32
 
 	private hiddenTitleBarStyle: boolean;
 	private showTimeoutHandle: any;
@@ -143,6 +143,10 @@ export class CodeWindow implements ICodeWindow {
 
 		const windowConfig = this.configurationService.getValue<IWindowSettings>('window');
 
+		if (isMacintosh && !this.useNativeFullScreen()) {
+			options.fullscreenable = false; // enables simple fullscreen mode
+		}
+
 		if (isMacintosh) {
 			options.acceptFirstMouse = true; // enabled by default
 
@@ -166,11 +170,7 @@ export class CodeWindow implements ICodeWindow {
 				useCustomTitleStyle = false; // not enabled when developing due to https://github.com/electron/electron/issues/3647
 			}
 		} else {
-			if (isLinux) {
-				useCustomTitleStyle = windowConfig && windowConfig.titleBarStyle === 'custom';
-			} else {
-				useCustomTitleStyle = !windowConfig || !windowConfig.titleBarStyle || windowConfig.titleBarStyle === 'custom'; // Default to custom on Windows
-			}
+			useCustomTitleStyle = !windowConfig || !windowConfig.titleBarStyle || windowConfig.titleBarStyle === 'custom'; // Default to custom
 		}
 
 		if (useNativeTabs) {
@@ -189,7 +189,7 @@ export class CodeWindow implements ICodeWindow {
 		this._win = new BrowserWindow(options);
 		this._id = this._win.id;
 
-		if (useCustomTitleStyle) {
+		if (isMacintosh && useCustomTitleStyle) {
 			this._win.setSheetOffset(22); // offset dialogs by the height of the custom title bar if we have any
 		}
 
@@ -197,7 +197,7 @@ export class CodeWindow implements ICodeWindow {
 			this._win.maximize();
 
 			if (this.windowState.mode === WindowMode.Fullscreen) {
-				this._win.setFullScreen(true);
+				this.setFullScreen(true);
 			}
 
 			if (!this._win.isVisible()) {
@@ -278,6 +278,10 @@ export class CodeWindow implements ICodeWindow {
 
 	get openedFolderUri(): URI {
 		return this.currentConfig ? this.currentConfig.folderUri : void 0;
+	}
+
+	get remoteAuthority(): string {
+		return this.currentConfig ? this.currentConfig.remoteAuthority : void 0;
 	}
 
 	setReady(): void {
@@ -370,6 +374,14 @@ export class CodeWindow implements ICodeWindow {
 		// Window Focus
 		this._win.on('focus', () => {
 			this._lastFocusTime = Date.now();
+		});
+
+		// Simple fullscreen doesn't resize automatically when the resolution changes
+		screen.on('display-metrics-changed', () => {
+			if (isMacintosh && this.isFullScreen() && !this.useNativeFullScreen()) {
+				this.setFullScreen(false);
+				this.setFullScreen(true);
+			}
 		});
 
 		// Window (Un)Maximize
@@ -586,7 +598,7 @@ export class CodeWindow implements ICodeWindow {
 		}
 
 		// Set fullscreen state
-		windowConfiguration.fullscreen = this._win.isFullScreen();
+		windowConfiguration.fullscreen = this.isFullScreen();
 
 		// Set Accessibility Config
 		let autoDetectHighContrast = true;
@@ -607,12 +619,31 @@ export class CodeWindow implements ICodeWindow {
 		const environment = parseArgs(process.argv);
 		const config = objects.assign(environment, windowConfiguration);
 		for (let key in config) {
-			if (config[key] === void 0 || config[key] === null || config[key] === '') {
+			if (config[key] === void 0 || config[key] === null || config[key] === '' || config[key] === false) {
 				delete config[key]; // only send over properties that have a true value
 			}
 		}
 
-		return `${require.toUrl('vs/workbench/electron-browser/bootstrap/index.html')}?config=${encodeURIComponent(JSON.stringify(config))}`;
+		// In the unlikely event of the URL becoming larger than 2MB, remove parts of
+		// it that are not under our control. Mainly, the user environment can be very
+		// large depending on user configuration, so we can only remove it in that case.
+		let configUrl = this.doGetUrl(config);
+		if (configUrl.length > CodeWindow.MAX_URL_LENGTH) {
+			delete config.userEnv;
+			this.logService.warn('Application URL exceeds maximum of 2MB and was shortened.');
+
+			configUrl = this.doGetUrl(config);
+
+			if (configUrl.length > CodeWindow.MAX_URL_LENGTH) {
+				this.logService.error('Application URL exceeds maximum of 2MB and cannot be loaded.');
+			}
+		}
+
+		return configUrl;
+	}
+
+	private doGetUrl(config: object): string {
+		return `${require.toUrl('vs/code/electron-browser/workbench/workbench.html')}?config=${encodeURIComponent(JSON.stringify(config))}`;
 	}
 
 	serializeWindowState(): IWindowState {
@@ -621,19 +652,27 @@ export class CodeWindow implements ICodeWindow {
 		}
 
 		// fullscreen gets special treatment
-		if (this._win.isFullScreen()) {
+		if (this.isFullScreen()) {
 			const display = screen.getDisplayMatching(this.getBounds());
 
-			return {
+			const defaultState = defaultWindowState();
+
+			const res = {
 				mode: WindowMode.Fullscreen,
 				display: display ? display.id : void 0,
 
-				// still carry over window dimensions from previous sessions!
-				width: this.windowState.width,
-				height: this.windowState.height,
-				x: this.windowState.x,
-				y: this.windowState.y
+				// Still carry over window dimensions from previous sessions
+				// if we can compute it in fullscreen state.
+				// does not seem possible in all cases on Linux for example
+				// (https://github.com/Microsoft/vscode/issues/58218) so we
+				// fallback to the defaults in that case.
+				width: this.windowState.width || defaultState.width,
+				height: this.windowState.height || defaultState.height,
+				x: this.windowState.x || 0,
+				y: this.windowState.y || 0
 			};
+
+			return res;
 		}
 
 		const state: IWindowState = Object.create(null);
@@ -779,13 +818,53 @@ export class CodeWindow implements ICodeWindow {
 	}
 
 	toggleFullScreen(): void {
-		const willBeFullScreen = !this._win.isFullScreen();
+		this.setFullScreen(!this.isFullScreen());
+	}
 
-		// set fullscreen flag on window
-		this._win.setFullScreen(willBeFullScreen);
+	private setFullScreen(fullscreen: boolean): void {
 
-		// respect configured menu bar visibility or default to toggle if not set
+		// Set fullscreen state
+		if (this.useNativeFullScreen()) {
+			this.setNativeFullScreen(fullscreen);
+		} else {
+			this.setSimpleFullScreen(fullscreen);
+		}
+
+		// Events
+		this.sendWhenReady(fullscreen ? 'vscode:enterFullScreen' : 'vscode:leaveFullScreen');
+
+		// Respect configured menu bar visibility or default to toggle if not set
 		this.setMenuBarVisibility(this.currentMenuBarVisibility, false);
+	}
+
+	isFullScreen(): boolean {
+		return this._win.isFullScreen() || this._win.isSimpleFullScreen();
+	}
+
+	private setNativeFullScreen(fullscreen: boolean): void {
+		if (this._win.isSimpleFullScreen()) {
+			this._win.setSimpleFullScreen(false);
+		}
+
+		this._win.setFullScreen(fullscreen);
+	}
+
+	private setSimpleFullScreen(fullscreen: boolean): void {
+		if (this._win.isFullScreen()) {
+			this._win.setFullScreen(false);
+		}
+
+		this._win.setSimpleFullScreen(fullscreen);
+		this._win.webContents.focus(); // workaround issue where focus is not going into window
+	}
+
+	private useNativeFullScreen(): boolean {
+		const windowConfig = this.configurationService.getValue<IWindowSettings>('window');
+		if (!windowConfig || typeof windowConfig.nativeFullScreen !== 'boolean') {
+			return true; // default
+		}
+
+		return windowConfig.nativeFullScreen !== false;
 	}
 
 	private getMenuBarVisibility(): MenuBarVisibility {
@@ -828,7 +907,7 @@ export class CodeWindow implements ICodeWindow {
 	}
 
 	private doSetMenuBarVisibility(visibility: MenuBarVisibility): void {
-		const isFullscreen = this._win.isFullScreen();
+		const isFullscreen = this.isFullScreen();
 
 		switch (visibility) {
 			case ('default'):
@@ -866,7 +945,11 @@ export class CodeWindow implements ICodeWindow {
 					break;
 				case 'Maximize':
 				default:
-					this.win.maximize();
+					if (this.win.isMaximized()) {
+						this.win.unmaximize();
+					} else {
+						this.win.maximize();
+					}
 			}
 		}
 

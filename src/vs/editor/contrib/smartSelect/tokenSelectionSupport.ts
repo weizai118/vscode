@@ -2,21 +2,19 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import { URI } from 'vs/base/common/uri';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { Range } from 'vs/editor/common/core/range';
 import { ITextModel } from 'vs/editor/common/model';
 import { IModelService } from 'vs/editor/common/services/modelService';
-import { Node, build, find } from './tokenTree';
+import { build, find } from './tokenTree';
 import { Position } from 'vs/editor/common/core/position';
 
 /**
  * Interface used to compute a hierachry of logical ranges.
  */
 export interface ILogicalSelectionEntry {
-	type: string;
+	type?: string;
 	range: Range;
 }
 
@@ -26,10 +24,6 @@ export class TokenSelectionSupport {
 
 	constructor(@IModelService modelService: IModelService) {
 		this._modelService = modelService;
-	}
-
-	public getRangesToPosition(resource: URI, position: Position): TPromise<ILogicalSelectionEntry[]> {
-		return TPromise.as(this.getRangesToPositionSync(resource, position));
 	}
 
 	public getRangesToPositionSync(resource: URI, position: Position): ILogicalSelectionEntry[] {
@@ -51,10 +45,9 @@ export class TokenSelectionSupport {
 	private _doGetRangesToPosition(model: ITextModel, position: Position): Range[] {
 
 		let tree = build(model);
-		let node: Node;
-		let lastRange: Range;
+		let lastRange: Range | undefined;
 
-		node = find(tree, position);
+		let node = find(tree, position);
 		let ranges: Range[] = [];
 		while (node) {
 			if (!lastRange || !Range.equalsRange(lastRange, node.range)) {

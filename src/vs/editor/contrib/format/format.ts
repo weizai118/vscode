@@ -5,13 +5,13 @@
 
 import { illegalArgument, onUnexpectedExternalError } from 'vs/base/common/errors';
 import { URI } from 'vs/base/common/uri';
-import { isFalsyOrEmpty } from 'vs/base/common/arrays';
+import { isNonEmptyArray } from 'vs/base/common/arrays';
 import { Range } from 'vs/editor/common/core/range';
 import { ITextModel } from 'vs/editor/common/model';
 import { registerDefaultLanguageCommand, registerLanguageCommand } from 'vs/editor/browser/editorExtensions';
 import { DocumentFormattingEditProviderRegistry, DocumentRangeFormattingEditProviderRegistry, OnTypeFormattingEditProviderRegistry, FormattingOptions, TextEdit } from 'vs/editor/common/modes';
 import { IModelService } from 'vs/editor/common/services/modelService';
-import { first2 } from 'vs/base/common/async';
+import { first } from 'vs/base/common/async';
 import { Position } from 'vs/editor/common/core/position';
 import { CancellationToken } from 'vs/base/common/cancellation';
 
@@ -22,11 +22,13 @@ export class NoProviderError extends Error {
 	constructor(message?: string) {
 		super();
 		this.name = NoProviderError.Name;
-		this.message = message;
+		if (message) {
+			this.message = message;
+		}
 	}
 }
 
-export function getDocumentRangeFormattingEdits(model: ITextModel, range: Range, options: FormattingOptions, token: CancellationToken): Promise<TextEdit[]> {
+export function getDocumentRangeFormattingEdits(model: ITextModel, range: Range, options: FormattingOptions, token: CancellationToken): Promise<TextEdit[] | undefined | null> {
 
 	const providers = DocumentRangeFormattingEditProviderRegistry.ordered(model);
 
@@ -34,13 +36,13 @@ export function getDocumentRangeFormattingEdits(model: ITextModel, range: Range,
 		return Promise.reject(new NoProviderError());
 	}
 
-	return first2(providers.map(provider => () => {
+	return first(providers.map(provider => () => {
 		return Promise.resolve(provider.provideDocumentRangeFormattingEdits(model, range, options, token))
 			.then(undefined, onUnexpectedExternalError);
-	}), result => !isFalsyOrEmpty(result));
+	}), isNonEmptyArray);
 }
 
-export function getDocumentFormattingEdits(model: ITextModel, options: FormattingOptions, token: CancellationToken): Promise<TextEdit[]> {
+export function getDocumentFormattingEdits(model: ITextModel, options: FormattingOptions, token: CancellationToken): Promise<TextEdit[] | null | undefined> {
 	const providers = DocumentFormattingEditProviderRegistry.ordered(model);
 
 	// try range formatters when no document formatter is registered
@@ -48,13 +50,13 @@ export function getDocumentFormattingEdits(model: ITextModel, options: Formattin
 		return getDocumentRangeFormattingEdits(model, model.getFullModelRange(), options, token);
 	}
 
-	return first2(providers.map(provider => () => {
+	return first(providers.map(provider => () => {
 		return Promise.resolve(provider.provideDocumentFormattingEdits(model, options, token))
 			.then(undefined, onUnexpectedExternalError);
-	}), result => !isFalsyOrEmpty(result));
+	}), isNonEmptyArray);
 }
 
-export function getOnTypeFormattingEdits(model: ITextModel, position: Position, ch: string, options: FormattingOptions): Promise<TextEdit[]> {
+export function getOnTypeFormattingEdits(model: ITextModel, position: Position, ch: string, options: FormattingOptions): Promise<TextEdit[] | null | undefined> {
 	const [support] = OnTypeFormattingEditProviderRegistry.ordered(model);
 	if (!support) {
 		return Promise.resolve(undefined);

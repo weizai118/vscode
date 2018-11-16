@@ -2,41 +2,36 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import 'vs/css!../browser/media/preferences';
-import * as nls from 'vs/nls';
+import { KeyChord, KeyCode, KeyMod } from 'vs/base/common/keyCodes';
 import { URI } from 'vs/base/common/uri';
-import { Registry } from 'vs/platform/registry/common/platform';
-import { KeybindingsRegistry, KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
-import { IWorkbenchActionRegistry, Extensions } from 'vs/workbench/common/actions';
-import { EditorInput, IEditorInputFactory, IEditorInputFactoryRegistry, Extensions as EditorInputExtensions } from 'vs/workbench/common/editor';
-import { SyncActionDescriptor, MenuRegistry, MenuId } from 'vs/platform/actions/common/actions';
-import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
-import { KeyMod, KeyChord, KeyCode } from 'vs/base/common/keyCodes';
-import { SyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
-import { PreferencesEditor } from 'vs/workbench/parts/preferences/browser/preferencesEditor';
-import { SettingsEditor2 } from 'vs/workbench/parts/preferences/browser/settingsEditor2';
-import { DefaultPreferencesEditorInput, PreferencesEditorInput, KeybindingsEditorInput, SettingsEditor2Input } from 'vs/workbench/services/preferences/common/preferencesEditorInput';
-import { KeybindingsEditor } from 'vs/workbench/parts/preferences/browser/keybindingsEditor';
-import { OpenDefaultKeybindingsFileAction, OpenRawDefaultSettingsAction, OpenSettingsAction, OpenGlobalSettingsAction, OpenGlobalKeybindingsFileAction, OpenWorkspaceSettingsAction, OpenFolderSettingsAction, ConfigureLanguageBasedSettingsAction, OPEN_FOLDER_SETTINGS_COMMAND, OpenGlobalKeybindingsAction, OpenSettings2Action, OpenSettingsJsonAction } from 'vs/workbench/parts/preferences/browser/preferencesActions';
-import {
-	IKeybindingsEditor, IPreferencesSearchService, CONTEXT_KEYBINDING_FOCUS, CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDINGS_SEARCH_FOCUS, KEYBINDINGS_EDITOR_COMMAND_DEFINE, KEYBINDINGS_EDITOR_COMMAND_REMOVE, KEYBINDINGS_EDITOR_COMMAND_SEARCH,
-	KEYBINDINGS_EDITOR_COMMAND_COPY, KEYBINDINGS_EDITOR_COMMAND_RESET, KEYBINDINGS_EDITOR_COMMAND_COPY_COMMAND, KEYBINDINGS_EDITOR_COMMAND_SHOW_SIMILAR, KEYBINDINGS_EDITOR_COMMAND_FOCUS_KEYBINDINGS, KEYBINDINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS, SETTINGS_EDITOR_COMMAND_SEARCH, CONTEXT_SETTINGS_EDITOR, SETTINGS_EDITOR_COMMAND_FOCUS_FILE, CONTEXT_SETTINGS_SEARCH_FOCUS, SETTINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS, SETTINGS_EDITOR_COMMAND_FOCUS_NEXT_SETTING, SETTINGS_EDITOR_COMMAND_FOCUS_PREVIOUS_SETTING, SETTINGS_EDITOR_COMMAND_EDIT_FOCUSED_SETTING, SETTINGS_EDITOR_COMMAND_FOCUS_SETTINGS_FROM_SEARCH, CONTEXT_TOC_ROW_FOCUS, SETTINGS_EDITOR_COMMAND_FOCUS_SETTINGS_LIST, SETTINGS_EDITOR_COMMAND_SHOW_CONTEXT_MENU
-} from 'vs/workbench/parts/preferences/common/preferences';
-import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
-import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions } from 'vs/workbench/common/contributions';
-import { PreferencesContribution } from 'vs/workbench/parts/preferences/common/preferencesContribution';
-import { ContextKeyExpr, RawContextKey } from 'vs/platform/contextkey/common/contextkey';
-import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
-import { CommandsRegistry } from 'vs/platform/commands/common/commands';
-import { IEditorRegistry, EditorDescriptor, Extensions as EditorExtensions } from 'vs/workbench/browser/editor';
-import { LifecyclePhase } from 'vs/platform/lifecycle/common/lifecycle';
-import { PreferencesSearchService } from 'vs/workbench/parts/preferences/electron-browser/preferencesSearch';
-import { IPreferencesService } from 'vs/workbench/services/preferences/common/preferences';
+import 'vs/css!../browser/media/preferences';
 import { Command } from 'vs/editor/browser/editorExtensions';
 import { Context as SuggestContext } from 'vs/editor/contrib/suggest/suggest';
-import { ConfigurationTarget } from 'vs/platform/configuration/common/configuration';
+import * as nls from 'vs/nls';
+import { MenuId, MenuRegistry, SyncActionDescriptor } from 'vs/platform/actions/common/actions';
+import { CommandsRegistry } from 'vs/platform/commands/common/commands';
+import { ContextKeyExpr, RawContextKey } from 'vs/platform/contextkey/common/contextkey';
+import { SyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
+import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
+import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
+import { KeybindingsRegistry, KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
+import { LifecyclePhase } from 'vs/platform/lifecycle/common/lifecycle';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { EditorDescriptor, Extensions as EditorExtensions, IEditorRegistry } from 'vs/workbench/browser/editor';
+import { Extensions, IWorkbenchActionRegistry } from 'vs/workbench/common/actions';
+import { Extensions as WorkbenchExtensions, IWorkbenchContributionsRegistry } from 'vs/workbench/common/contributions';
+import { EditorInput, Extensions as EditorInputExtensions, IEditorInputFactory, IEditorInputFactoryRegistry } from 'vs/workbench/common/editor';
+import { KeybindingsEditor } from 'vs/workbench/parts/preferences/browser/keybindingsEditor';
+import { ConfigureLanguageBasedSettingsAction, OpenDefaultKeybindingsFileAction, OpenFolderSettingsAction, OpenGlobalKeybindingsAction, OpenGlobalKeybindingsFileAction, OpenGlobalSettingsAction, OpenRawDefaultSettingsAction, OpenSettings2Action, OpenSettingsAction, OpenSettingsJsonAction, OpenWorkspaceSettingsAction, OPEN_FOLDER_SETTINGS_COMMAND } from 'vs/workbench/parts/preferences/browser/preferencesActions';
+import { PreferencesEditor } from 'vs/workbench/parts/preferences/browser/preferencesEditor';
+import { CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDINGS_SEARCH_FOCUS, CONTEXT_KEYBINDING_FOCUS, CONTEXT_SETTINGS_EDITOR, CONTEXT_SETTINGS_JSON_EDITOR, CONTEXT_SETTINGS_SEARCH_FOCUS, CONTEXT_TOC_ROW_FOCUS, IKeybindingsEditor, IPreferencesSearchService, KEYBINDINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS, KEYBINDINGS_EDITOR_COMMAND_COPY, KEYBINDINGS_EDITOR_COMMAND_COPY_COMMAND, KEYBINDINGS_EDITOR_COMMAND_DEFINE, KEYBINDINGS_EDITOR_COMMAND_FOCUS_KEYBINDINGS, KEYBINDINGS_EDITOR_COMMAND_RECORD_SEARCH_KEYS, KEYBINDINGS_EDITOR_COMMAND_REMOVE, KEYBINDINGS_EDITOR_COMMAND_RESET, KEYBINDINGS_EDITOR_COMMAND_SEARCH, KEYBINDINGS_EDITOR_COMMAND_SHOW_SIMILAR, KEYBINDINGS_EDITOR_COMMAND_SORTBY_PRECEDENCE, KEYBINDINGS_EDITOR_SHOW_DEFAULT_KEYBINDINGS, KEYBINDINGS_EDITOR_SHOW_USER_KEYBINDINGS, MODIFIED_SETTING_TAG, SETTINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS, SETTINGS_EDITOR_COMMAND_EDIT_FOCUSED_SETTING, SETTINGS_EDITOR_COMMAND_FILTER_MODIFIED, SETTINGS_EDITOR_COMMAND_FILTER_ONLINE, SETTINGS_EDITOR_COMMAND_FOCUS_FILE, SETTINGS_EDITOR_COMMAND_FOCUS_NEXT_SETTING, SETTINGS_EDITOR_COMMAND_FOCUS_PREVIOUS_SETTING, SETTINGS_EDITOR_COMMAND_FOCUS_SETTINGS_FROM_SEARCH, SETTINGS_EDITOR_COMMAND_FOCUS_SETTINGS_LIST, SETTINGS_EDITOR_COMMAND_SEARCH, SETTINGS_EDITOR_COMMAND_SHOW_CONTEXT_MENU, SETTINGS_EDITOR_COMMAND_SWITCH_TO_JSON } from 'vs/workbench/parts/preferences/common/preferences';
+import { PreferencesContribution } from 'vs/workbench/parts/preferences/common/preferencesContribution';
+import { PreferencesSearchService } from 'vs/workbench/parts/preferences/electron-browser/preferencesSearch';
+import { SettingsEditor2 } from 'vs/workbench/parts/preferences/electron-browser/settingsEditor2';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { IPreferencesService } from 'vs/workbench/services/preferences/common/preferences';
+import { DefaultPreferencesEditorInput, KeybindingsEditorInput, PreferencesEditorInput, SettingsEditor2Input } from 'vs/workbench/services/preferences/common/preferencesEditorInput';
 
 registerSingleton(IPreferencesSearchService, PreferencesSearchService);
 
@@ -151,31 +146,20 @@ class KeybindingsEditorInputFactory implements IEditorInputFactory {
 }
 
 interface ISerializedSettingsEditor2EditorInput {
-	resource: string;
-	configurationTarget: ConfigurationTarget;
-	folderResource?: string;
 }
 
 class SettingsEditor2InputFactory implements IEditorInputFactory {
 
 	public serialize(input: SettingsEditor2Input): string {
 		const serialized: ISerializedSettingsEditor2EditorInput = {
-			resource: input.getResource().toString(),
-			configurationTarget: input.configurationTarget,
-			folderResource: input.folderUri && input.folderUri.toString()
 		};
 
 		return JSON.stringify(serialized);
 	}
 
 	public deserialize(instantiationService: IInstantiationService, serializedEditorInput: string): SettingsEditor2Input {
-		const deserialized: ISerializedSettingsEditor2EditorInput = JSON.parse(serializedEditorInput);
-
 		return instantiationService.createInstance(
-			SettingsEditor2Input,
-			URI.parse(deserialized.resource),
-			deserialized.configurationTarget,
-			deserialized.folderResource && URI.parse(deserialized.folderResource));
+			SettingsEditor2Input);
 	}
 }
 
@@ -217,7 +201,7 @@ registry.registerWorkbenchAction(new SyncActionDescriptor(OpenGlobalSettingsActi
 
 registry.registerWorkbenchAction(new SyncActionDescriptor(OpenGlobalKeybindingsAction, OpenGlobalKeybindingsAction.ID, OpenGlobalKeybindingsAction.LABEL, { primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyMod.CtrlCmd | KeyCode.KEY_S) }), 'Preferences: Open Keyboard Shortcuts', category);
 registry.registerWorkbenchAction(new SyncActionDescriptor(OpenDefaultKeybindingsFileAction, OpenDefaultKeybindingsFileAction.ID, OpenDefaultKeybindingsFileAction.LABEL), 'Preferences: Open Default Keyboard Shortcuts File', category);
-registry.registerWorkbenchAction(new SyncActionDescriptor(OpenGlobalKeybindingsFileAction, OpenGlobalKeybindingsFileAction.ID, OpenGlobalKeybindingsFileAction.LABEL, { primary: null }), 'Preferences: Open Keyboard Shortcuts File', category);
+registry.registerWorkbenchAction(new SyncActionDescriptor(OpenGlobalKeybindingsFileAction, OpenGlobalKeybindingsFileAction.ID, OpenGlobalKeybindingsFileAction.LABEL, { primary: 0 }), 'Preferences: Open Keyboard Shortcuts File', category);
 registry.registerWorkbenchAction(new SyncActionDescriptor(ConfigureLanguageBasedSettingsAction, ConfigureLanguageBasedSettingsAction.ID, ConfigureLanguageBasedSettingsAction.LABEL), 'Preferences: Configure Language Specific Settings...', category);
 
 KeybindingsRegistry.registerCommandAndKeybindingRule({
@@ -227,7 +211,9 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyMod.CtrlCmd | KeyCode.KEY_K),
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.defineKeybinding(control.activeKeybindingEntry);
+		if (control && control instanceof KeybindingsEditor) {
+			control.defineKeybinding(control.activeKeybindingEntry);
+		}
 	}
 });
 
@@ -241,7 +227,9 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	},
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.removeKeybinding(control.activeKeybindingEntry);
+		if (control && control instanceof KeybindingsEditor) {
+			control.removeKeybinding(control.activeKeybindingEntry);
+		}
 	}
 });
 
@@ -249,29 +237,66 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: KEYBINDINGS_EDITOR_COMMAND_RESET,
 	weight: KeybindingWeight.WorkbenchContrib,
 	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDING_FOCUS),
-	primary: null,
+	primary: 0,
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.resetKeybinding(control.activeKeybindingEntry);
+		if (control && control instanceof KeybindingsEditor) {
+			control.resetKeybinding(control.activeKeybindingEntry);
+		}
 	}
 });
 
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: KEYBINDINGS_EDITOR_COMMAND_SEARCH,
 	weight: KeybindingWeight.WorkbenchContrib,
-	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDING_FOCUS),
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDINGS_SEARCH_FOCUS.toNegated()),
 	primary: KeyMod.CtrlCmd | KeyCode.KEY_F,
-	handler: (accessor, args: any) => (accessor.get(IEditorService).activeControl as IKeybindingsEditor).focusSearch()
+	handler: (accessor, args: any) => {
+		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
+		if (control && control instanceof KeybindingsEditor) {
+			control.focusSearch();
+		}
+	}
+});
+
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: KEYBINDINGS_EDITOR_COMMAND_RECORD_SEARCH_KEYS,
+	weight: KeybindingWeight.WorkbenchContrib,
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDINGS_SEARCH_FOCUS),
+	primary: KeyMod.Alt | KeyCode.KEY_K,
+	mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KEY_K },
+	handler: (accessor, args: any) => {
+		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
+		if (control && control instanceof KeybindingsEditor) {
+			control.recordSearchKeys();
+		}
+	}
+});
+
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: KEYBINDINGS_EDITOR_COMMAND_SORTBY_PRECEDENCE,
+	weight: KeybindingWeight.WorkbenchContrib,
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR),
+	primary: KeyMod.Alt | KeyCode.KEY_P,
+	mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KEY_P },
+	handler: (accessor, args: any) => {
+		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
+		if (control && control instanceof KeybindingsEditor) {
+			control.toggleSortByPrecedence();
+		}
+	}
 });
 
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: KEYBINDINGS_EDITOR_COMMAND_SHOW_SIMILAR,
 	weight: KeybindingWeight.WorkbenchContrib,
 	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDING_FOCUS),
-	primary: null,
+	primary: 0,
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.showSimilarKeybindings(control.activeKeybindingEntry);
+		if (control) {
+			control.showSimilarKeybindings(control.activeKeybindingEntry);
+		}
 	}
 });
 
@@ -282,7 +307,9 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	primary: KeyMod.CtrlCmd | KeyCode.KEY_C,
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.copyKeybinding(control.activeKeybindingEntry);
+		if (control) {
+			control.copyKeybinding(control.activeKeybindingEntry);
+		}
 	}
 });
 
@@ -290,10 +317,12 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: KEYBINDINGS_EDITOR_COMMAND_COPY_COMMAND,
 	weight: KeybindingWeight.WorkbenchContrib,
 	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDING_FOCUS),
-	primary: null,
+	primary: 0,
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.copyKeybindingCommand(control.activeKeybindingEntry);
+		if (control) {
+			control.copyKeybindingCommand(control.activeKeybindingEntry);
+		}
 	}
 });
 
@@ -304,18 +333,9 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	primary: KeyCode.DownArrow,
 	handler: (accessor, args: any) => {
 		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.focusKeybindings();
-	}
-});
-
-KeybindingsRegistry.registerCommandAndKeybindingRule({
-	id: KEYBINDINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS,
-	weight: KeybindingWeight.WorkbenchContrib,
-	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDINGS_SEARCH_FOCUS),
-	primary: KeyCode.Escape,
-	handler: (accessor, args: any) => {
-		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
-		control.clearSearchResults();
+		if (control) {
+			control.focusKeybindings();
+		}
 	}
 });
 
@@ -332,7 +352,7 @@ CommandsRegistry.registerCommand(OpenFolderSettingsAction.ID, serviceAccessor =>
 MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
 	command: {
 		id: OpenFolderSettingsAction.ID,
-		title: `${category}: ${OpenFolderSettingsAction.LABEL}`,
+		title: { value: `${category}: ${OpenFolderSettingsAction.LABEL}`, original: 'Preferences: Open Folder Settings' },
 	},
 	when: new RawContextKey<string>('workbenchState', '').isEqualTo('workspace')
 });
@@ -343,9 +363,68 @@ CommandsRegistry.registerCommand(OpenWorkspaceSettingsAction.ID, serviceAccessor
 MenuRegistry.appendMenuItem(MenuId.CommandPalette, {
 	command: {
 		id: OpenWorkspaceSettingsAction.ID,
-		title: `${category}: ${OpenWorkspaceSettingsAction.LABEL}`,
+		title: { value: `${category}: ${OpenWorkspaceSettingsAction.LABEL}`, original: 'Preferences: Open Workspace Settings' },
 	},
 	when: new RawContextKey<string>('workbenchState', '').notEqualsTo('empty')
+});
+
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: KEYBINDINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS,
+	weight: KeybindingWeight.WorkbenchContrib,
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR, CONTEXT_KEYBINDINGS_SEARCH_FOCUS),
+	primary: KeyCode.Escape,
+	handler: (accessor, args: any) => {
+		const control = accessor.get(IEditorService).activeControl as IKeybindingsEditor;
+		if (control) {
+			control.clearSearchResults();
+		}
+	}
+});
+
+CommandsRegistry.registerCommand(OpenGlobalKeybindingsFileAction.ID, serviceAccessor => {
+	serviceAccessor.get(IInstantiationService).createInstance(OpenGlobalKeybindingsFileAction, OpenGlobalKeybindingsFileAction.ID, OpenGlobalKeybindingsFileAction.LABEL).run();
+});
+MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
+	command: {
+		id: OpenGlobalKeybindingsFileAction.ID,
+		title: OpenGlobalKeybindingsFileAction.LABEL,
+		iconLocation: {
+			light: URI.parse(require.toUrl(`vs/workbench/parts/preferences/electron-browser/media/edit-json.svg`)),
+			dark: URI.parse(require.toUrl(`vs/workbench/parts/preferences/electron-browser/media/edit-json-inverse.svg`))
+		}
+	},
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR),
+	group: 'navigation',
+});
+
+CommandsRegistry.registerCommand(KEYBINDINGS_EDITOR_SHOW_DEFAULT_KEYBINDINGS, serviceAccessor => {
+	const control = serviceAccessor.get(IEditorService).activeControl as IKeybindingsEditor;
+	if (control) {
+		control.search('@source:default');
+	}
+});
+MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
+	command: {
+		id: KEYBINDINGS_EDITOR_SHOW_DEFAULT_KEYBINDINGS,
+		title: nls.localize('showDefaultKeybindings', "Show Default Keybindings")
+	},
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR),
+	group: '1_keyboard_preferences_actions'
+});
+
+CommandsRegistry.registerCommand(KEYBINDINGS_EDITOR_SHOW_USER_KEYBINDINGS, serviceAccessor => {
+	const control = serviceAccessor.get(IEditorService).activeControl as IKeybindingsEditor;
+	if (control) {
+		control.search('@source:user');
+	}
+});
+MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
+	command: {
+		id: KEYBINDINGS_EDITOR_SHOW_USER_KEYBINDINGS,
+		title: nls.localize('showUserKeybindings', "Show User Keybindings")
+	},
+	when: ContextKeyExpr.and(CONTEXT_KEYBINDINGS_EDITOR),
+	group: '1_keyboard_preferences_actions'
 });
 
 abstract class SettingsCommand extends Command {
@@ -498,6 +577,29 @@ const showContextMenuCommand = new ShowContextMenuCommand({
 });
 showContextMenuCommand.register();
 
+CommandsRegistry.registerCommand(SETTINGS_EDITOR_COMMAND_SWITCH_TO_JSON, serviceAccessor => {
+	const control = serviceAccessor.get(IEditorService).activeControl as SettingsEditor2;
+	if (control instanceof SettingsEditor2) {
+		return control.switchToSettingsFile();
+	}
+
+	return Promise.resolve(null);
+});
+
+CommandsRegistry.registerCommand(SETTINGS_EDITOR_COMMAND_FILTER_MODIFIED, serviceAccessor => {
+	const control = serviceAccessor.get(IEditorService).activeControl as SettingsEditor2;
+	if (control instanceof SettingsEditor2) {
+		control.focusSearch(`@${MODIFIED_SETTING_TAG}`);
+	}
+});
+
+CommandsRegistry.registerCommand(SETTINGS_EDITOR_COMMAND_FILTER_ONLINE, serviceAccessor => {
+	const control = serviceAccessor.get(IEditorService).activeControl as SettingsEditor2;
+	if (control instanceof SettingsEditor2) {
+		control.focusSearch(`@tag:usesOnlineServices`);
+	}
+});
+
 // Preferences menu
 
 MenuRegistry.appendMenuItem(MenuId.MenubarPreferencesMenu, {
@@ -516,4 +618,49 @@ MenuRegistry.appendMenuItem(MenuId.MenubarPreferencesMenu, {
 		title: nls.localize({ key: 'miOpenKeymap', comment: ['&& denotes a mnemonic'] }, "&&Keyboard Shortcuts")
 	},
 	order: 1
+});
+
+// Editor tool items
+
+MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
+	command: {
+		id: SETTINGS_EDITOR_COMMAND_SWITCH_TO_JSON,
+		title: nls.localize('openSettingsJson', "Open Settings (JSON)"),
+		iconLocation: {
+			dark: URI.parse(require.toUrl('vs/workbench/parts/preferences/electron-browser/media/edit-json-inverse.svg')),
+			light: URI.parse(require.toUrl('vs/workbench/parts/preferences/electron-browser/media/edit-json.svg'))
+		}
+	},
+	group: 'navigation',
+	order: 1,
+	when: ContextKeyExpr.and(
+		CONTEXT_SETTINGS_EDITOR,
+		CONTEXT_SETTINGS_JSON_EDITOR.toNegated()
+	)
+});
+
+MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
+	command: {
+		id: SETTINGS_EDITOR_COMMAND_FILTER_MODIFIED,
+		title: nls.localize('filterModifiedLabel', "Show modified settings")
+	},
+	group: '1_filter',
+	order: 1,
+	when: ContextKeyExpr.and(
+		CONTEXT_SETTINGS_EDITOR,
+		CONTEXT_SETTINGS_JSON_EDITOR.toNegated()
+	)
+});
+
+MenuRegistry.appendMenuItem(MenuId.EditorTitle, {
+	command: {
+		id: SETTINGS_EDITOR_COMMAND_FILTER_ONLINE,
+		title: nls.localize('filterOnlineServicesLabel', "Show settings for online services"),
+	},
+	group: '1_filter',
+	order: 2,
+	when: ContextKeyExpr.and(
+		CONTEXT_SETTINGS_EDITOR,
+		CONTEXT_SETTINGS_JSON_EDITOR.toNegated()
+	)
 });

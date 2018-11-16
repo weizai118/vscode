@@ -13,7 +13,7 @@ import { Event, Emitter } from 'vs/base/common/event';
  */
 
 export interface Sender {
-	send(channel: string, msg: string): void;
+	send(channel: string, msg: string | null): void;
 }
 
 export class Protocol implements IMessagePassingProtocol {
@@ -36,6 +36,7 @@ export class Protocol implements IMessagePassingProtocol {
 	}
 
 	dispose(): void {
+		this.sender.send('ipc:disconnect', null);
 		this.listener = dispose(this.listener);
 	}
 }

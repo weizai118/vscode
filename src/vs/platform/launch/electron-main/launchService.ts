@@ -3,10 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import { TPromise } from 'vs/base/common/winjs.base';
-import { IChannel } from 'vs/base/parts/ipc/node/ipc';
+import { IChannel, IServerChannel } from 'vs/base/parts/ipc/node/ipc';
 import { ILogService } from 'vs/platform/log/common/log';
 import { IURLService } from 'vs/platform/url/common/url';
 import { IProcessEnvironment, isMacintosh } from 'vs/base/common/platform';
@@ -21,6 +19,7 @@ import { URI, UriComponents } from 'vs/base/common/uri';
 import { BrowserWindow } from 'electron';
 import { Event } from 'vs/base/common/event';
 import { hasArgs } from 'vs/platform/environment/node/argv';
+import { coalesce } from 'vs/base/common/arrays';
 
 export const ID = 'launchService';
 export const ILaunchService = createDecorator<ILaunchService>(ID);
@@ -38,6 +37,7 @@ export interface IWindowInfo {
 
 export interface IMainProcessInfo {
 	mainPID: number;
+	// All arguments after argv[0], the exec path
 	mainArguments: string[];
 	windows: IWindowInfo[];
 }
@@ -46,15 +46,14 @@ function parseOpenUrl(args: ParsedArgs): URI[] {
 	if (args['open-url'] && args._urls && args._urls.length > 0) {
 		// --open-url must contain -- followed by the url(s)
 		// process.argv is used over args._ as args._ are resolved to file paths at this point
-		return args._urls
+		return coalesce(args._urls
 			.map(url => {
 				try {
 					return URI.parse(url);
 				} catch (err) {
 					return null;
 				}
-			})
-			.filter(uri => !!uri);
+			}));
 	}
 
 	return [];
@@ -68,23 +67,15 @@ export interface ILaunchService {
 	getLogsPath(): TPromise<string>;
 }
 
-export interface ILaunchChannel extends IChannel {
-	call(command: 'start', arg: IStartArguments): TPromise<void>;
-	call(command: 'get-main-process-id', arg: null): TPromise<any>;
-	call(command: 'get-main-process-info', arg: null): TPromise<any>;
-	call(command: 'get-logs-path', arg: null): TPromise<string>;
-	call(command: string, arg: any): TPromise<any>;
-}
-
-export class LaunchChannel implements ILaunchChannel {
+export class LaunchChannel implements IServerChannel {
 
 	constructor(private service: ILaunchService) { }
 
-	listen<T>(event: string): Event<T> {
-		throw new Error('No event found');
+	listen<T>(_, event: string): Event<T> {
+		throw new Error(`Event not found: ${event}`);
 	}
 
-	call(command: string, arg: any): TPromise<any> {
+	call(_, command: string, arg: any): TPromise<any> {
 		switch (command) {
 			case 'start':
 				const { args, userEnv } = arg as IStartArguments;
@@ -100,7 +91,7 @@ export class LaunchChannel implements ILaunchChannel {
 				return this.service.getLogsPath();
 		}
 
-		return undefined;
+		throw new Error(`Call not found: ${command}`);
 	}
 }
 
@@ -108,7 +99,7 @@ export class LaunchChannelClient implements ILaunchService {
 
 	_serviceBrand: any;
 
-	constructor(private channel: ILaunchChannel) { }
+	constructor(private channel: IChannel) { }
 
 	start(args: ParsedArgs, userEnv: IProcessEnvironment): TPromise<void> {
 		return this.channel.call('start', { args, userEnv });
@@ -162,7 +153,7 @@ export class LaunchService implements ILaunchService {
 				}
 			});
 
-			return TPromise.as(null);
+			return TPromise.as(void 0);
 		}
 
 		// Otherwise handle in windows service
@@ -171,7 +162,7 @@ export class LaunchService implements ILaunchService {
 
 	private startOpenWindow(args: ParsedArgs, userEnv: IProcessEnvironment): TPromise<void> {
 		const context = !!userEnv['VSCODE_CLI'] ? OpenContext.CLI : OpenContext.DESKTOP;
-		let usedWindows: ICodeWindow[];
+		let usedWindows: ICodeWindow[] = [];
 
 		// Special case extension development
 		if (!!args.extensionDevelopmentPath) {
@@ -232,14 +223,14 @@ export class LaunchService implements ILaunchService {
 		// If the other instance is waiting to be killed, we hook up a window listener if one window
 		// is being used and only then resolve the startup promise which will kill this second instance.
 		// In addition, we poll for the wait marker file to be deleted to return.
-		if (args.wait && usedWindows.length === 1 && usedWindows[0]) {
-			return TPromise.any([
+		if (args.wait && args.waitMarkerFilePath && usedWindows.length === 1 && usedWindows[0]) {
+			return Promise.race([
 				this.windowsMainService.waitForWindowCloseOrLoad(usedWindows[0].id),
 				whenDeleted(args.waitMarkerFilePath)
 			]).then(() => void 0, () => void 0);
 		}
 
-		return TPromise.as(null);
+		return TPromise.as(void 0);
 	}
 
 	getMainProcessId(): TPromise<number> {
@@ -263,7 +254,7 @@ export class LaunchService implements ILaunchService {
 
 		return TPromise.wrap({
 			mainPID: process.pid,
-			mainArguments: process.argv,
+			mainArguments: process.argv.slice(1),
 			windows
 		} as IMainProcessInfo);
 	}
@@ -280,10 +271,13 @@ export class LaunchService implements ILaunchService {
 		if (window.openedFolderUri) {
 			folderURIs.push(window.openedFolderUri);
 		} else if (window.openedWorkspace) {
-			const rootFolders = this.workspacesMainService.resolveWorkspaceSync(window.openedWorkspace.configPath).folders;
-			rootFolders.forEach(root => {
-				folderURIs.push(root.uri);
-			});
+			const resolvedWorkspace = this.workspacesMainService.resolveWorkspaceSync(window.openedWorkspace.configPath);
+			if (resolvedWorkspace) {
+				const rootFolders = resolvedWorkspace.folders;
+				rootFolders.forEach(root => {
+					folderURIs.push(root.uri);
+				});
+			}
 		}
 
 		return this.browserWindowToInfo(window.win, folderURIs);

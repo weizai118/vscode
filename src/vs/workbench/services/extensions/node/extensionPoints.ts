@@ -3,21 +3,18 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as nls from 'vs/nls';
-import * as pfs from 'vs/base/node/pfs';
-import { IExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { join, normalize, extname } from 'path';
-import * as json from 'vs/base/common/json';
-import * as types from 'vs/base/common/types';
-import { isValidExtensionVersion } from 'vs/platform/extensions/node/extensionValidator';
+import { extname, join, normalize } from 'path';
 import * as semver from 'semver';
-import { getIdAndVersionFromLocalExtensionId } from 'vs/platform/extensionManagement/node/extensionManagementUtil';
+import * as json from 'vs/base/common/json';
 import { getParseErrorMessage } from 'vs/base/common/jsonErrorMessages';
-import { groupByExtension, getGalleryExtensionId, getLocalExtensionId } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
+import * as types from 'vs/base/common/types';
 import { URI } from 'vs/base/common/uri';
+import * as pfs from 'vs/base/node/pfs';
+import { getGalleryExtensionId, getLocalExtensionId, groupByExtension } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
+import { getIdAndVersionFromLocalExtensionId } from 'vs/platform/extensionManagement/node/extensionManagementUtil';
+import { isValidExtensionVersion } from 'vs/platform/extensions/node/extensionValidator';
+import { IExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
 
 const MANIFEST_FILE = 'package.json';
 
@@ -83,7 +80,7 @@ abstract class ExtensionManifestHandler {
 
 class ExtensionManifestParser extends ExtensionManifestHandler {
 
-	public parse(): TPromise<IExtensionDescription> {
+	public parse(): Promise<IExtensionDescription> {
 		return pfs.readFile(this._absoluteManifestPath).then((manifestContents) => {
 			try {
 				const manifest = JSON.parse(manifestContents.toString());
@@ -116,7 +113,7 @@ class ExtensionManifestNLSReplacer extends ExtensionManifestHandler {
 		this._nlsConfig = nlsConfig;
 	}
 
-	public replaceNLS(extensionDescription: IExtensionDescription): TPromise<IExtensionDescription> {
+	public replaceNLS(extensionDescription: IExtensionDescription): Promise<IExtensionDescription> {
 		interface MessageBag {
 			[key: string]: string;
 		}
@@ -143,7 +140,7 @@ class ExtensionManifestNLSReplacer extends ExtensionManifestHandler {
 
 		const translationId = `${extensionDescription.publisher}.${extensionDescription.name}`;
 		let translationPath = this._nlsConfig.translations[translationId];
-		let localizedMessages: TPromise<LocalizedMessages>;
+		let localizedMessages: Promise<LocalizedMessages>;
 		if (translationPath) {
 			localizedMessages = pfs.readFile(translationPath, 'utf8').then<LocalizedMessages, LocalizedMessages>((content) => {
 				let errors: json.ParseError[] = [];
@@ -208,7 +205,7 @@ class ExtensionManifestNLSReplacer extends ExtensionManifestHandler {
 	 * Parses original message bundle, returns null if the original message bundle is null.
 	 */
 	private static resolveOriginalMessageBundle(originalMessageBundle: string, errors: json.ParseError[]) {
-		return new TPromise<{ [key: string]: string; }>((c, e) => {
+		return new Promise<{ [key: string]: string; }>((c, e) => {
 			if (originalMessageBundle) {
 				pfs.readFile(originalMessageBundle).then(originalBundleContent => {
 					c(json.parse(originalBundleContent.toString(), errors));
@@ -225,8 +222,8 @@ class ExtensionManifestNLSReplacer extends ExtensionManifestHandler {
 	 * Finds localized message bundle and the original (unlocalized) one.
 	 * If the localized file is not present, returns null for the original and marks original as localized.
 	 */
-	private static findMessageBundles(nlsConfig: NlsConfiguration, basename: string): TPromise<{ localized: string, original: string }> {
-		return new TPromise<{ localized: string, original: string }>((c, e) => {
+	private static findMessageBundles(nlsConfig: NlsConfiguration, basename: string): Promise<{ localized: string, original: string }> {
+		return new Promise<{ localized: string, original: string }>((c, e) => {
 			function loop(basename: string, locale: string): void {
 				let toCheck = `${basename}.nls.${locale}.json`;
 				pfs.fileExists(toCheck).then(exists => {
@@ -334,6 +331,11 @@ class ExtensionManifestValidator extends ExtensionManifestHandler {
 			this._log.warn(this._absoluteFolderPath, error);
 		});
 
+		// allow publisher to be undefined to make the initial extension authoring experience smoother
+		if (!extensionDescription.publisher) {
+			extensionDescription.publisher = 'undefined_publisher';
+		}
+
 		// id := `publisher.name`
 		extensionDescription.id = `${extensionDescription.publisher}.${extensionDescription.name}`;
 
@@ -366,8 +368,8 @@ class ExtensionManifestValidator extends ExtensionManifestHandler {
 			notices.push(nls.localize('extensionDescription.empty', "Got empty extension description"));
 			return false;
 		}
-		if (typeof extensionDescription.publisher !== 'string') {
-			notices.push(nls.localize('extensionDescription.publisher', "property `{0}` is mandatory and must be of type `string`", 'publisher'));
+		if (typeof extensionDescription.publisher !== 'undefined' && typeof extensionDescription.publisher !== 'string') {
+			notices.push(nls.localize('extensionDescription.publisher', "property publisher must be of type `string`."));
 			return false;
 		}
 		if (typeof extensionDescription.name !== 'string') {
@@ -482,14 +484,14 @@ export interface IExtensionReference {
 }
 
 export interface IExtensionResolver {
-	resolveExtensions(): TPromise<IExtensionReference[]>;
+	resolveExtensions(): Promise<IExtensionReference[]>;
 }
 
 class DefaultExtensionResolver implements IExtensionResolver {
 
 	constructor(private root: string) { }
 
-	resolveExtensions(): TPromise<IExtensionReference[]> {
+	resolveExtensions(): Promise<IExtensionReference[]> {
 		return pfs.readDirsInDir(this.root)
 			.then(folders => folders.map(name => ({ name, path: join(this.root, name) })));
 	}
@@ -500,7 +502,7 @@ export class ExtensionScanner {
 	/**
 	 * Read the extension defined in `absoluteFolderPath`
 	 */
-	public static scanExtension(version: string, log: ILog, absoluteFolderPath: string, isBuiltin: boolean, isUnderDevelopment: boolean, nlsConfig: NlsConfiguration): TPromise<IExtensionDescription> {
+	public static scanExtension(version: string, log: ILog, absoluteFolderPath: string, isBuiltin: boolean, isUnderDevelopment: boolean, nlsConfig: NlsConfiguration): Promise<IExtensionDescription> {
 		absoluteFolderPath = normalize(absoluteFolderPath);
 
 		let parser = new ExtensionManifestParser(version, log, absoluteFolderPath, isBuiltin, isUnderDevelopment);
@@ -524,7 +526,7 @@ export class ExtensionScanner {
 	/**
 	 * Scan a list of extensions defined in `absoluteFolderPath`
 	 */
-	public static async scanExtensions(input: ExtensionScannerInput, log: ILog, resolver: IExtensionResolver = null): Promise<IExtensionDescription[]> {
+	public static async scanExtensions(input: ExtensionScannerInput, log: ILog, resolver: IExtensionResolver | null = null): Promise<IExtensionDescription[]> {
 		const absoluteFolderPath = input.absoluteFolderPath;
 		const isBuiltin = input.isBuiltin;
 		const isUnderDevelopment = input.isUnderDevelopment;
@@ -568,7 +570,7 @@ export class ExtensionScanner {
 			}
 
 			const nlsConfig = ExtensionScannerInput.createNLSConfig(input);
-			let extensionDescriptions = await TPromise.join(refs.map(r => this.scanExtension(input.ourVersion, log, r.path, isBuiltin, isUnderDevelopment, nlsConfig)));
+			let extensionDescriptions = await Promise.all(refs.map(r => this.scanExtension(input.ourVersion, log, r.path, isBuiltin, isUnderDevelopment, nlsConfig)));
 			extensionDescriptions = extensionDescriptions.filter(item => item !== null && !obsolete[getLocalExtensionId(getGalleryExtensionId(item.publisher, item.name), item.version)]);
 
 			if (!isBuiltin) {
@@ -594,7 +596,7 @@ export class ExtensionScanner {
 	 * Combination of scanExtension and scanExtensions: If an extension manifest is found at root, we load just this extension,
 	 * otherwise we assume the folder contains multiple extensions.
 	 */
-	public static scanOneOrMultipleExtensions(input: ExtensionScannerInput, log: ILog): TPromise<IExtensionDescription[]> {
+	public static scanOneOrMultipleExtensions(input: ExtensionScannerInput, log: ILog): Promise<IExtensionDescription[]> {
 		const absoluteFolderPath = input.absoluteFolderPath;
 		const isBuiltin = input.isBuiltin;
 		const isUnderDevelopment = input.isUnderDevelopment;

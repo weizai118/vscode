@@ -30,6 +30,9 @@ export interface ParsedArgs {
 	'prof-startup-prefix'?: string;
 	'prof-append-timers'?: string;
 	verbose?: boolean;
+	trace?: boolean;
+	'trace-category-filter'?: string;
+	'trace-options'?: string;
 	log?: string;
 	logExtensionHostCommunication?: boolean;
 	'extensions-dir'?: string;
@@ -65,6 +68,7 @@ export interface ParsedArgs {
 	'upload-logs'?: string;
 	'driver'?: string;
 	'driver-verbose'?: boolean;
+	remote?: string;
 }
 
 export const IEnvironmentService = createDecorator<IEnvironmentService>('environmentService');
@@ -99,6 +103,8 @@ export interface IEnvironmentService {
 	settingsSearchBuildId: number;
 	settingsSearchUrl: string;
 
+	workspaceStorageHome: string;
+
 	backupHome: string;
 	backupWorkspacesPath: string;
 
@@ -113,7 +119,6 @@ export interface IEnvironmentService {
 
 	debugExtensionHost: IExtensionHostDebugParams;
 	debugSearch: IDebugParams;
-
 
 	logExtensionHostCommunication: boolean;
 

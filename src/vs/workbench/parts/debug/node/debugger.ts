@@ -4,32 +4,36 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as nls from 'vs/nls';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { Client as TelemetryClient } from 'vs/base/parts/ipc/node/ipc.cp';
 import * as strings from 'vs/base/common/strings';
 import * as objects from 'vs/base/common/objects';
 import { TelemetryAppenderClient } from 'vs/platform/telemetry/node/telemetryIpc';
 import { IJSONSchema, IJSONSchemaSnippet } from 'vs/base/common/jsonSchema';
 import { IWorkspaceFolder } from 'vs/platform/workspace/common/workspace';
-import { IConfig, IDebuggerContribution, IAdapterExecutable, INTERNAL_CONSOLE_OPTIONS_SCHEMA, IConfigurationManager, IDebugAdapter, IDebugConfiguration, ITerminalSettings } from 'vs/workbench/parts/debug/common/debug';
+import { IConfig, IDebuggerContribution, IDebugAdapterExecutable, INTERNAL_CONSOLE_OPTIONS_SCHEMA, IConfigurationManager, IDebugAdapter, IDebugConfiguration, ITerminalSettings, IDebugger, IDebugSession, IAdapterDescriptor, IDebugAdapterServer } from 'vs/workbench/parts/debug/common/debug';
 import { IExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { IOutputService } from 'vs/workbench/parts/output/common/output';
-import { DebugAdapter, SocketDebugAdapter } from 'vs/workbench/parts/debug/node/debugAdapter';
+import { ExecutableDebugAdapter, SocketDebugAdapter } from 'vs/workbench/parts/debug/node/debugAdapter';
 import { IConfigurationResolverService } from 'vs/workbench/services/configurationResolver/common/configurationResolver';
+import * as ConfigurationResolverUtils from 'vs/workbench/services/configurationResolver/common/configurationResolverUtils';
 import { TelemetryService } from 'vs/platform/telemetry/common/telemetryService';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { memoize } from 'vs/base/common/decorators';
 import { TaskDefinitionRegistry } from 'vs/workbench/parts/tasks/common/taskDefinitionRegistry';
 import { getPathFromAmdModule } from 'vs/base/common/amd';
+import { ITextResourcePropertiesService } from 'vs/editor/common/services/resourceConfiguration';
+import { URI } from 'vs/base/common/uri';
+import { Schemas } from 'vs/base/common/network';
 
-export class Debugger {
+export class Debugger implements IDebugger {
 
 	private mergedExtensionDescriptions: IExtensionDescription[];
 
 	constructor(private configurationManager: IConfigurationManager, private debuggerContribution: IDebuggerContribution, public extensionDescription: IExtensionDescription,
 		@IConfigurationService private configurationService: IConfigurationService,
+		@ITextResourcePropertiesService private resourcePropertiesService: ITextResourcePropertiesService,
 		@ICommandService private commandService: ICommandService,
 		@IConfigurationResolverService private configurationResolverService: IConfigurationResolverService,
 		@ITelemetryService private telemetryService: ITelemetryService,
@@ -37,43 +41,63 @@ export class Debugger {
 		this.mergedExtensionDescriptions = [extensionDescription];
 	}
 
-	public hasConfigurationProvider = false;
 
-	public createDebugAdapter(root: IWorkspaceFolder, outputService: IOutputService, debugPort?: number): TPromise<IDebugAdapter> {
-		return this.getAdapterExecutable(root).then(adapterExecutable => {
-			if (this.inEH()) {
-				return this.configurationManager.createDebugAdapter(this.type, adapterExecutable, debugPort);
-			} else {
-				if (debugPort) {
-					return new SocketDebugAdapter(debugPort);
-				} else {
-					return new DebugAdapter(this.type, adapterExecutable, this.mergedExtensionDescriptions, outputService);
+	createDebugAdapter(session: IDebugSession, outputService: IOutputService): Promise<IDebugAdapter> {
+		if (this.inExtHost()) {
+			return Promise.resolve(this.configurationManager.createDebugAdapter(session));
+		} else {
+			return this.getAdapterDescriptor(session).then(adapterDescriptor => {
+				switch (adapterDescriptor.type) {
+					case 'executable':
+						return new ExecutableDebugAdapter(adapterDescriptor, this.type, outputService);
+					case 'server':
+						return new SocketDebugAdapter(adapterDescriptor);
+					case 'implementation':
+						// TODO@AW: this.inExtHost() should now return true
+						return Promise.resolve(this.configurationManager.createDebugAdapter(session));
+					default:
+						throw new Error('Cannot create debug adapter.');
 				}
-			}
-		});
+			});
+		}
 	}
 
-	public getAdapterExecutable(root: IWorkspaceFolder): TPromise<IAdapterExecutable | null> {
+	private getAdapterDescriptor(session: IDebugSession): Promise<IAdapterDescriptor> {
 
-		// first try to get an executable from DebugConfigurationProvider
-		return this.configurationManager.debugAdapterExecutable(root ? root.uri : undefined, this.type).then(adapterExecutable => {
+		// a "debugServer" attribute in the launch config takes precedence
+		if (typeof session.configuration.debugServer === 'number') {
+			return Promise.resolve(<IDebugAdapterServer>{
+				type: 'server',
+				port: session.configuration.debugServer
+			});
+		}
 
-			if (adapterExecutable) {
-				return adapterExecutable;
+		// try the proposed and the deprecated "provideDebugAdapter" API
+		return this.configurationManager.provideDebugAdapter(session).then(adapter => {
+
+			if (adapter) {
+				return adapter;
 			}
 
-			// try deprecated command based extension API to receive an executable
+			// try deprecated command based extension API "adapterExecutableCommand" to determine the executable
 			if (this.debuggerContribution.adapterExecutableCommand) {
-				return this.commandService.executeCommand<IAdapterExecutable>(this.debuggerContribution.adapterExecutableCommand, root ? root.uri.toString() : undefined);
+				const rootFolder = session.root ? session.root.uri.toString() : undefined;
+				return this.commandService.executeCommand<IDebugAdapterExecutable>(this.debuggerContribution.adapterExecutableCommand, rootFolder).then((ae: { command: string, args: string[] }) => {
+					return <IAdapterDescriptor>{
+						type: 'executable',
+						command: ae.command,
+						args: ae.args || []
+					};
+				});
 			}
 
-			// give up and let DebugAdapter determine executable based on package.json contribution
-			return TPromise.as(null);
+			// fallback: use executable information from package.json
+			return ExecutableDebugAdapter.platformAdapterExecutable(this.mergedExtensionDescriptions, this.type);
 		});
 	}
 
-	public substituteVariables(folder: IWorkspaceFolder, config: IConfig): TPromise<IConfig> {
-		if (this.inEH()) {
+	substituteVariables(folder: IWorkspaceFolder, config: IConfig): Thenable<IConfig> {
+		if (this.inExtHost()) {
 			return this.configurationManager.substituteVariables(this.type, folder, config).then(config => {
 				return this.configurationResolverService.resolveWithCommands(folder, config, this.variables);
 			});
@@ -82,37 +106,37 @@ export class Debugger {
 		}
 	}
 
-	public runInTerminal(args: DebugProtocol.RunInTerminalRequestArguments): TPromise<void> {
+	runInTerminal(args: DebugProtocol.RunInTerminalRequestArguments): Promise<void> {
 		const config = this.configurationService.getValue<ITerminalSettings>('terminal');
-		return this.configurationManager.runInTerminal(this.inEH() ? this.type : '*', args, config);
+		return this.configurationManager.runInTerminal(this.inExtHost() ? this.type : '*', args, config);
 	}
 
-	private inEH(): boolean {
+	private inExtHost(): boolean {
 		const debugConfigs = this.configurationService.getValue<IDebugConfiguration>('debug');
-		return debugConfigs.extensionHostDebugAdapter || this.extensionDescription.extensionLocation.scheme !== 'file';
+		return debugConfigs.extensionHostDebugAdapter || this.configurationManager.needsToRunInExtHost(this.type) || this.extensionDescription.extensionLocation.scheme !== 'file';
 	}
 
-	public get label(): string {
+	get label(): string {
 		return this.debuggerContribution.label || this.debuggerContribution.type;
 	}
 
-	public get type(): string {
+	get type(): string {
 		return this.debuggerContribution.type;
 	}
 
-	public get variables(): { [key: string]: string } {
+	get variables(): { [key: string]: string } {
 		return this.debuggerContribution.variables;
 	}
 
-	public get configurationSnippets(): IJSONSchemaSnippet[] {
+	get configurationSnippets(): IJSONSchemaSnippet[] {
 		return this.debuggerContribution.configurationSnippets;
 	}
 
-	public get languages(): string[] {
+	get languages(): string[] {
 		return this.debuggerContribution.languages;
 	}
 
-	public merge(secondRawAdapter: IDebuggerContribution, extensionDescription: IExtensionDescription): void {
+	merge(secondRawAdapter: IDebuggerContribution, extensionDescription: IExtensionDescription): void {
 
 		// remember all ext descriptions that are the source of this debugger
 		this.mergedExtensionDescriptions.push(extensionDescription);
@@ -124,18 +148,22 @@ export class Debugger {
 		objects.mixin(this.debuggerContribution, secondRawAdapter, extensionDescription.isBuiltin);
 	}
 
-	public hasInitialConfiguration(): boolean {
+	hasInitialConfiguration(): boolean {
 		return !!this.debuggerContribution.initialConfigurations;
 	}
 
-	public getInitialConfigurationContent(initialConfigs?: IConfig[]): TPromise<string> {
+	hasConfigurationProvider(): boolean {
+		return this.configurationManager.hasDebugConfigurationProvider(this.type);
+	}
+
+	getInitialConfigurationContent(initialConfigs?: IConfig[]): Promise<string> {
 		// at this point we got some configs from the package.json and/or from registered DebugConfigurationProviders
 		let initialConfigurations = this.debuggerContribution.initialConfigurations || [];
 		if (initialConfigs) {
 			initialConfigurations = initialConfigurations.concat(initialConfigs);
 		}
 
-		const eol = this.configurationService.getValue<string>('files.eol') === '\r\n' ? '\r\n' : '\n';
+		const eol = this.resourcePropertiesService.getEOL(URI.from({ scheme: Schemas.untitled, path: '1' })) === '\r\n' ? '\r\n' : '\n';
 		const configs = JSON.stringify(initialConfigurations, null, '\t').split('\n').map(line => '\t' + line).join(eol).trim();
 		const comment1 = nls.localize('launch.config.comment1', "Use IntelliSense to learn about possible attributes.");
 		const comment2 = nls.localize('launch.config.comment2', "Hover to view descriptions of existing attributes.");
@@ -157,13 +185,13 @@ export class Debugger {
 			content = content.replace(new RegExp('\t', 'g'), strings.repeat(' ', editorConfig.editor.tabSize));
 		}
 
-		return TPromise.as(content);
+		return Promise.resolve(content);
 	}
 
 	@memoize
-	public getCustomTelemetryService(): TPromise<TelemetryService> {
+	getCustomTelemetryService(): Thenable<TelemetryService> {
 		if (!this.debuggerContribution.aiKey) {
-			return TPromise.as(undefined);
+			return Promise.resolve(undefined);
 		}
 
 		return this.telemetryService.getTelemetryInfo().then(info => {
@@ -173,7 +201,7 @@ export class Debugger {
 			return telemetryInfo;
 		}).then(data => {
 			const client = new TelemetryClient(
-				getPathFromAmdModule(require, 'bootstrap'),
+				getPathFromAmdModule(require, 'bootstrap-fork'),
 				{
 					serverName: 'Debug Telemetry',
 					timeout: 1000 * 60 * 5,
@@ -193,7 +221,7 @@ export class Debugger {
 		});
 	}
 
-	public getSchemaAttributes(): IJSONSchema[] {
+	getSchemaAttributes(): IJSONSchema[] {
 		if (!this.debuggerContribution.configurationAttributes) {
 			return null;
 		}
@@ -264,9 +292,7 @@ export class Debugger {
 			};
 			Object.keys(attributes.properties).forEach(name => {
 				// Use schema allOf property to get independent error reporting #21113
-				attributes.properties[name].pattern = attributes.properties[name].pattern || '^(?!.*\\$\\{(env|config|command)\\.)';
-				attributes.properties[name].patternErrorMessage = attributes.properties[name].patternErrorMessage ||
-					nls.localize('deprecatedVariables', "'env.', 'config.' and 'command.' are deprecated, use 'env:', 'config:' and 'command:' instead.");
+				ConfigurationResolverUtils.applyDeprecatedVariableMessage(attributes.properties[name]);
 			});
 
 			return attributes;

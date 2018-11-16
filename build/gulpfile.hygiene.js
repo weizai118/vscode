@@ -43,6 +43,7 @@ const indentationFilter = [
 	// except specific files
 	'!ThirdPartyNotices.txt',
 	'!LICENSE.txt',
+	'!**/LICENSE',
 	'!src/vs/nls.js',
 	'!src/vs/nls.build.js',
 	'!src/vs/css.js',
@@ -80,12 +81,14 @@ const indentationFilter = [
 	'!src/vs/*/**/*.d.ts',
 	'!src/typings/**/*.d.ts',
 	'!extensions/**/*.d.ts',
-	'!**/*.{svg,exe,png,bmp,scpt,bat,cmd,cur,ttf,woff,eot,md,ps1,template,yaml,yml,d.ts.recipe}',
+	'!**/*.{svg,exe,png,bmp,scpt,bat,cmd,cur,ttf,woff,eot,md,ps1,template,yaml,yml,d.ts.recipe,ico,icns}',
 	'!build/{lib,tslintRules}/**/*.js',
 	'!build/**/*.sh',
 	'!build/tfs/**/*.js',
 	'!build/tfs/**/*.config',
 	'!**/Dockerfile',
+	'!**/*.Dockerfile',
+	'!**/*.dockerfile',
 	'!extensions/markdown-language-features/media/*.js'
 ];
 
@@ -98,6 +101,8 @@ const copyrightFilter = [
 	'!**/*.md',
 	'!**/*.bat',
 	'!**/*.cmd',
+	'!**/*.ico',
+	'!**/*.icns',
 	'!**/*.xml',
 	'!**/*.sh',
 	'!**/*.txt',

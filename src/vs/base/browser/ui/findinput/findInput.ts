@@ -2,7 +2,6 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import 'vs/css!./findInput';
 
@@ -46,6 +45,7 @@ export class FindInput extends Widget {
 	private placeholder: string;
 	private validation: IInputValidator;
 	private label: string;
+	private fixFocusOnOptionClickEnabled = true;
 
 	private inputActiveOptionBorder: Color;
 	private inputBackground: Color;
@@ -89,7 +89,7 @@ export class FindInput extends Widget {
 	private _onRegexKeyDown = this._register(new Emitter<IKeyboardEvent>());
 	public readonly onRegexKeyDown: Event<IKeyboardEvent> = this._onRegexKeyDown.event;
 
-	constructor(parent: HTMLElement, contextViewProvider: IContextViewProvider, options?: IFindInputOptions) {
+	constructor(parent: HTMLElement, contextViewProvider: IContextViewProvider, private readonly _showOptionButtons: boolean, options?: IFindInputOptions) {
 		super();
 		this.contextViewProvider = contextViewProvider;
 		this.width = options.width || 100;
@@ -146,6 +146,10 @@ export class FindInput extends Widget {
 		this.caseSensitive.disable();
 	}
 
+	public setFocusInputOnOptionClick(value: boolean): void {
+		this.fixFocusOnOptionClickEnabled = value;
+	}
+
 	public setEnabled(enabled: boolean): void {
 		if (enabled) {
 			this.enable();
@@ -175,6 +179,10 @@ export class FindInput extends Widget {
 		if (this.inputBox.value !== value) {
 			this.inputBox.value = value;
 		}
+	}
+
+	public onSearchSubmit(): void {
+		this.inputBox.addToHistory();
 	}
 
 	public style(styles: IFindInputStyles): void {
@@ -312,7 +320,7 @@ export class FindInput extends Widget {
 		}));
 		this._register(this.regex.onChange(viaKeyboard => {
 			this._onDidOptionChange.fire(viaKeyboard);
-			if (!viaKeyboard) {
+			if (!viaKeyboard && this.fixFocusOnOptionClickEnabled) {
 				this.inputBox.focus();
 			}
 			this.setInputWidth();
@@ -329,7 +337,7 @@ export class FindInput extends Widget {
 		}));
 		this._register(this.wholeWords.onChange(viaKeyboard => {
 			this._onDidOptionChange.fire(viaKeyboard);
-			if (!viaKeyboard) {
+			if (!viaKeyboard && this.fixFocusOnOptionClickEnabled) {
 				this.inputBox.focus();
 			}
 			this.setInputWidth();
@@ -343,7 +351,7 @@ export class FindInput extends Widget {
 		}));
 		this._register(this.caseSensitive.onChange(viaKeyboard => {
 			this._onDidOptionChange.fire(viaKeyboard);
-			if (!viaKeyboard) {
+			if (!viaKeyboard && this.fixFocusOnOptionClickEnabled) {
 				this.inputBox.focus();
 			}
 			this.setInputWidth();
@@ -385,6 +393,7 @@ export class FindInput extends Widget {
 
 		let controls = document.createElement('div');
 		controls.className = 'controls';
+		controls.style.display = this._showOptionButtons ? 'block' : 'none';
 		controls.appendChild(this.caseSensitive.domNode);
 		controls.appendChild(this.wholeWords.domNode);
 		controls.appendChild(this.regex.domNode);

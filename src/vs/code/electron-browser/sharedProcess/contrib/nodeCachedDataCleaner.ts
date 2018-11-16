@@ -2,12 +2,10 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import { basename, dirname, join } from 'path';
 import { onUnexpectedError } from 'vs/base/common/errors';
 import { dispose, IDisposable } from 'vs/base/common/lifecycle';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { readdir, rimraf, stat } from 'vs/base/node/pfs';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import product from 'vs/platform/node/product';
@@ -43,13 +41,13 @@ export class NodeCachedDataCleaner {
 		const nodeCachedDataRootDir = dirname(this._environmentService.nodeCachedDataDir);
 		const nodeCachedDataCurrent = basename(this._environmentService.nodeCachedDataDir);
 
-		let handle = setTimeout(() => {
+		let handle: any = setTimeout(() => {
 			handle = undefined;
 
 			readdir(nodeCachedDataRootDir).then(entries => {
 
 				const now = Date.now();
-				const deletes: TPromise<any>[] = [];
+				const deletes: Thenable<any>[] = [];
 
 				entries.forEach(entry => {
 					// name check
@@ -72,7 +70,7 @@ export class NodeCachedDataCleaner {
 					}
 				});
 
-				return TPromise.join(deletes);
+				return Promise.all(deletes);
 
 			}).then(undefined, onUnexpectedError);
 

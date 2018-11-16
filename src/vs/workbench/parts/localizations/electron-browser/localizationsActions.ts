@@ -7,7 +7,6 @@ import { localize } from 'vs/nls';
 import { Action } from 'vs/base/common/actions';
 import { IFileService } from 'vs/platform/files/common/files';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { IEditor } from 'vs/workbench/common/editor';
 import { join } from 'vs/base/common/paths';
 import { URI } from 'vs/base/common/uri';
@@ -37,7 +36,7 @@ export class ConfigureLocaleAction extends Action {
 		super(id, label);
 	}
 
-	public run(event?: any): TPromise<IEditor> {
+	public run(event?: any): Thenable<IEditor> {
 		const file = URI.file(join(this.environmentService.appSettingsHome, 'locale.json'));
 		return this.fileService.resolveFile(file).then(null, (error) => {
 			return this.fileService.createFile(file, ConfigureLocaleAction.DEFAULT_CONTENT);
@@ -49,7 +48,7 @@ export class ConfigureLocaleAction extends Action {
 				resource: stat.resource
 			});
 		}, (error) => {
-			throw new Error(localize('fail.createSettings', "Unable to create '{0}' ({1}).", this.labelService.getUriLabel(file, true), error));
+			throw new Error(localize('fail.createSettings', "Unable to create '{0}' ({1}).", this.labelService.getUriLabel(file, { relative: true }), error));
 		});
 	}
 }

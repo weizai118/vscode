@@ -5,7 +5,6 @@
 
 import * as nls from 'vs/nls';
 import * as lifecycle from 'vs/base/common/lifecycle';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { KeyCode } from 'vs/base/common/keyCodes';
 import { ScrollbarVisibility } from 'vs/base/common/scrollable';
 import * as dom from 'vs/base/browser/dom';
@@ -77,6 +76,7 @@ export class DebugHoverWidget implements IContentWidget {
 			controller: this.instantiationService.createInstance(DebugHoverController, this.editor)
 		}, {
 				indentPixels: 6,
+				horizontalScrollMode: ScrollbarVisibility.Auto,
 				twistiePixels: 15,
 				ariaLabel: nls.localize('treeAriaLabel', "Debug Hover")
 			});
@@ -139,7 +139,7 @@ export class DebugHoverWidget implements IContentWidget {
 		return this.domNode;
 	}
 
-	public showAt(range: Range, focus: boolean): TPromise<void> {
+	public showAt(range: Range, focus: boolean): Promise<void> {
 		const pos = range.getStartPosition();
 
 		const session = this.debugService.getViewModel().focusedSession;
@@ -148,10 +148,10 @@ export class DebugHoverWidget implements IContentWidget {
 		// use regex to extract the sub-expression #9821
 		const matchingExpression = lineContent.substring(start - 1, end);
 		if (!matchingExpression) {
-			return TPromise.as(this.hide());
+			return Promise.resolve(this.hide());
 		}
 
-		let promise: TPromise<IExpression>;
+		let promise: Promise<IExpression>;
 		if (session.capabilities.supportsEvaluateForHovers) {
 			const result = new Expression(matchingExpression);
 			promise = result.evaluate(session, this.debugService.getViewModel().focusedStackFrame, 'hover').then(() => result);
@@ -178,9 +178,9 @@ export class DebugHoverWidget implements IContentWidget {
 		className: 'hoverHighlight'
 	});
 
-	private doFindExpression(container: IExpressionContainer, namesToFind: string[]): TPromise<IExpression> {
+	private doFindExpression(container: IExpressionContainer, namesToFind: string[]): Promise<IExpression> {
 		if (!container) {
-			return TPromise.as(null);
+			return Promise.resolve(null);
 		}
 
 		return container.getChildren().then(children => {
@@ -198,16 +198,16 @@ export class DebugHoverWidget implements IContentWidget {
 		});
 	}
 
-	private findExpressionInStackFrame(namesToFind: string[]): TPromise<IExpression> {
+	private findExpressionInStackFrame(namesToFind: string[]): Promise<IExpression> {
 		return this.debugService.getViewModel().focusedStackFrame.getScopes()
 			.then(scopes => scopes.filter(s => !s.expensive))
-			.then(scopes => TPromise.join(scopes.map(scope => this.doFindExpression(scope, namesToFind))))
+			.then(scopes => Promise.all(scopes.map(scope => this.doFindExpression(scope, namesToFind))))
 			.then(expressions => expressions.filter(exp => !!exp))
 			// only show if all expressions found have the same value
 			.then(expressions => (expressions.length > 0 && expressions.every(e => e.value === expressions[0].value)) ? expressions[0] : null);
 	}
 
-	private doShow(position: Position, expression: IExpression, focus: boolean, forceValueHover = false): TPromise<void> {
+	private doShow(position: Position, expression: IExpression, focus: boolean, forceValueHover = false): Thenable<void> {
 		if (!this.domNode) {
 			this.create();
 		}
@@ -232,7 +232,7 @@ export class DebugHoverWidget implements IContentWidget {
 				this.valueContainer.focus();
 			}
 
-			return TPromise.as(null);
+			return Promise.resolve(null);
 		}
 
 		this.valueContainer.hidden = true;

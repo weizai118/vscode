@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as fs from 'fs';
 import * as path from 'path';
 import * as pfs from 'vs/base/node/pfs';
@@ -13,7 +11,6 @@ import { IConfigurationService } from 'vs/platform/configuration/common/configur
 import { ILifecycleService } from 'vs/platform/lifecycle/electron-main/lifecycleMain';
 import { IRequestService } from 'vs/platform/request/node/request';
 import product from 'vs/platform/node/product';
-import { TPromise, Promise } from 'vs/base/common/winjs.base';
 import { State, IUpdate, StateType, AvailableForDownload, UpdateType } from 'vs/platform/update/common/update';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
@@ -25,19 +22,12 @@ import { tmpdir } from 'os';
 import { spawn } from 'child_process';
 import { shell } from 'electron';
 import { CancellationToken } from 'vs/base/common/cancellation';
+import { timeout } from 'vs/base/common/async';
 
-function pollUntil(fn: () => boolean, timeout = 1000): TPromise<void> {
-	return new TPromise<void>(c => {
-		const poll = () => {
-			if (fn()) {
-				c(null);
-			} else {
-				setTimeout(poll, timeout);
-			}
-		};
-
-		poll();
-	});
+async function pollUntil(fn: () => boolean, millis = 1000): Promise<void> {
+	while (!fn()) {
+		await timeout(millis);
+	}
 }
 
 interface IAvailableUpdate {
@@ -63,7 +53,7 @@ export class Win32UpdateService extends AbstractUpdateService {
 	private availableUpdate: IAvailableUpdate | undefined;
 
 	@memoize
-	get cachePath(): TPromise<string> {
+	get cachePath(): Thenable<string> {
 		const result = path.join(tmpdir(), `vscode-update-${product.target}-${process.arch}`);
 		return pfs.mkdirp(result, null).then(() => result);
 	}
@@ -130,12 +120,12 @@ export class Win32UpdateService extends AbstractUpdateService {
 					this.telemetryService.publicLog('update:notAvailable', { explicit: !!context });
 
 					this.setState(State.Idle(updateType));
-					return TPromise.as(null);
+					return Promise.resolve(null);
 				}
 
 				if (updateType === UpdateType.Archive) {
 					this.setState(State.AvailableForDownload(update));
-					return TPromise.as(null);
+					return Promise.resolve(null);
 				}
 
 				this.setState(State.Downloading(update));
@@ -144,7 +134,7 @@ export class Win32UpdateService extends AbstractUpdateService {
 					return this.getUpdatePackagePath(update.version).then(updatePackagePath => {
 						return pfs.exists(updatePackagePath).then(exists => {
 							if (exists) {
-								return TPromise.as(updatePackagePath);
+								return Promise.resolve(updatePackagePath);
 							}
 
 							const url = update.url;
@@ -182,39 +172,44 @@ export class Win32UpdateService extends AbstractUpdateService {
 					}
 					*/
 				this.telemetryService.publicLog('update:notAvailable', { explicit: !!context });
-				this.setState(State.Idle(getUpdateType()));
+				this.setState(State.Idle(getUpdateType(), err.message || err));
 			});
 	}
 
-	protected doDownloadUpdate(state: AvailableForDownload): TPromise<void> {
+	protected async doDownloadUpdate(state: AvailableForDownload): Promise<void> {
 		shell.openExternal(state.update.url);
 		this.setState(State.Idle(getUpdateType()));
-		return TPromise.as(null);
 	}
 
-	private getUpdatePackagePath(version: string): TPromise<string> {
-		return this.cachePath.then(cachePath => path.join(cachePath, `CodeSetup-${product.quality}-${version}.exe`));
+	private async getUpdatePackagePath(version: string): Promise<string> {
+		const cachePath = await this.cachePath;
+		return path.join(cachePath, `CodeSetup-${product.quality}-${version}.exe`);
 	}
 
-	private cleanup(exceptVersion: string = null): Promise {
+	private async cleanup(exceptVersion: string | null = null): Promise<any> {
 		const filter = exceptVersion ? one => !(new RegExp(`${product.quality}-${exceptVersion}\\.exe$`).test(one)) : () => true;
 
-		return this.cachePath
-			.then(cachePath => pfs.readdir(cachePath)
-				.then(all => Promise.join(all
-					.filter(filter)
-					.map(one => pfs.unlink(path.join(cachePath, one)).then(null, () => null))
-				))
-			);
+		const cachePath = await this.cachePath;
+		const versions = await pfs.readdir(cachePath);
+
+		const promises = versions.filter(filter).map(async one => {
+			try {
+				await pfs.unlink(path.join(cachePath, one));
+			} catch (err) {
+				// ignore
+			}
+		});
+
+		await Promise.all(promises);
 	}
 
-	protected doApplyUpdate(): TPromise<void> {
+	protected doApplyUpdate(): Thenable<void> {
 		if (this.state.type !== StateType.Downloaded && this.state.type !== StateType.Downloading) {
-			return TPromise.as(null);
+			return Promise.resolve(null);
 		}
 
 		if (!this.availableUpdate) {
-			return TPromise.as(null);
+			return Promise.resolve(null);
 		}
 
 		const update = this.state.update;

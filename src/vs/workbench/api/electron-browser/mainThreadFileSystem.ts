@@ -2,7 +2,6 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import { Emitter, Event } from 'vs/base/common/event';
 import { IDisposable, dispose, toDisposable } from 'vs/base/common/lifecycle';
@@ -40,8 +39,8 @@ export class MainThreadFileSystem implements MainThreadFileSystemShape {
 		this._fileProvider.delete(handle);
 	}
 
-	$setUriFormatter(scheme: string, formatter: LabelRules): void {
-		this._labelService.registerFormatter(scheme, formatter);
+	$setUriFormatter(selector: string, formatter: LabelRules): void {
+		this._labelService.registerFormatter(selector, formatter);
 	}
 
 	$onFileSystemChange(handle: number, changes: IFileChangeDto[]): void {
@@ -52,10 +51,12 @@ export class MainThreadFileSystem implements MainThreadFileSystemShape {
 class RemoteFileSystemProvider implements IFileSystemProvider {
 
 	private readonly _onDidChange = new Emitter<IFileChange[]>();
-	private readonly _registrations: IDisposable[];
+	private readonly _registration: IDisposable;
 
 	readonly onDidChangeFile: Event<IFileChange[]> = this._onDidChange.event;
+
 	readonly capabilities: FileSystemProviderCapabilities;
+	readonly onDidChangeCapabilities: Event<void> = Event.None;
 
 	constructor(
 		fileService: IFileService,
@@ -65,11 +66,11 @@ class RemoteFileSystemProvider implements IFileSystemProvider {
 		private readonly _proxy: ExtHostFileSystemShape
 	) {
 		this.capabilities = capabilities;
-		this._registrations = [fileService.registerProvider(scheme, this)];
+		this._registration = fileService.registerProvider(scheme, this);
 	}
 
 	dispose(): void {
-		dispose(this._registrations);
+		this._registration.dispose();
 		this._onDidChange.dispose();
 	}
 
